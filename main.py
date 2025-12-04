@@ -6,7 +6,6 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import datetime
 import json
-import re
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Media SEO AI", layout="wide", page_icon="🅱️")
@@ -29,17 +28,16 @@ try:
     DFS_PASSWORD = st.secrets["DFS_PASSWORD"]
     gsc_info = st.secrets["gsc_service_account"]
 except Exception as e:
-    st.error("Secrets yapılandırması eksik! Lütfen secrets.toml dosyasını kontrol edin.")
+    st.error(f"Secrets hatası: {e}")
     st.stop()
 
 genai.configure(api_key=GOOGLE_API_KEY)
-# Date parser için daha hızlı bir model, analiz için daha zeki model kullanılabilir
 model = genai.GenerativeModel('gemini-2.0-flash') 
 
 # --- SESSION STATE ---
 if 'brands' not in st.session_state:
     st.session_state.brands = {} 
-    # Varsayılan bir demo proje
+    # Varsayılan Demo Proje
     st.session_state.brands["Demo Proje"] = {"gsc_url": "", "context": ""}
 
 if 'active_brand' not in st.session_state:
@@ -107,39 +105,26 @@ def get_dataforseo_data(keyword, loc, lang):
         return None
 
 def extract_dates_from_prompt(user_prompt):
-    """
-    Kullanıcının yazdığı metinden tarih aralığını anlayan AI fonksiyonu.
-    Örn: "Geçen hafta" -> start: 2023-10-01, end: 2023-10-07
-    """
     today = datetime.date.today()
-    
     system_prompt = f"""
     Bugünün tarihi: {today}.
     Kullanıcı bir GSC veri analizi isteyecek. Metinden kastedilen tarih aralığını çıkar.
-    Eğer kullanıcı tarih belirtmezse varsayılan olarak "son 28 günü" al.
-    
-    Çıktıyı SADECE şu JSON formatında ver, başka hiçbir şey yazma:
-    {{
-        "start_date": "YYYY-MM-DD",
-        "end_date": "YYYY-MM-DD"
-    }}
-    
+    Eğer tarih belirtilmezse varsayılan olarak "son 28 günü" al.
+    Çıktıyı SADECE JSON formatında ver: {{"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"}}
     Kullanıcı Metni: "{user_prompt}"
     """
     try:
         response = model.generate_content(system_prompt)
-        # JSON temizleme (Bazen markdown ```json ... ``` dönebilir)
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         dates = json.loads(clean_text)
         return dates['start_date'], dates['end_date']
     except:
-        # Hata olursa son 28 günü dön
         end = today
         start = today - datetime.timedelta(days=28)
         return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 # --- ARAYÜZ ---
-st.title("PlanB Media SEO Agent v2.0")
+st.title("PlanB Media SEO Agent v2.1")
 
 tab_kw, tab_gsc = st.tabs(["🔍 Keyword Research & Proje", "🤖 GSC Chatbot"])
 
@@ -148,26 +133,24 @@ tab_kw, tab_gsc = st.tabs(["🔍 Keyword Research & Proje", "🤖 GSC Chatbot"])
 # ==========================================
 with tab_kw:
     # --- PROJE YÖNETİM ALANI ---
-    st.markdown("### 📁 Proje Yönetimi")
+    st.markdown("### 📁 Proje Seçimi")
     p_col1, p_col2, p_col3 = st.columns([2, 2, 2])
     
     with p_col1:
-        # Mevcut markaları listele
         brand_list = list(st.session_state.brands.keys())
         selected_brand = st.selectbox("Çalışılan Proje", brand_list, index=brand_list.index(st.session_state.active_brand))
         
-        # Seçim değişirse güncelle
         if selected_brand != st.session_state.active_brand:
             st.session_state.active_brand = selected_brand
-            st.session_state.messages = [] # Sohbeti temizle
+            st.session_state.messages = [] 
             st.rerun()
 
     with p_col2:
         new_brand_name = st.text_input("Yeni Proje Oluştur", placeholder="Marka Adı (Örn: Altınyıldız)")
     
     with p_col3:
-        st.write("") # Hizalama boşluğu
-        if st.button("➕ Projeyi Kaydet"):
+        st.write("") 
+        if st.button("➕ Projeyi Ekle"):
             if new_brand_name and new_brand_name not in st.session_state.brands:
                 st.session_state.brands[new_brand_name] = {"gsc_url": "", "context": ""}
                 st.session_state.active_brand = new_brand_name
@@ -176,17 +159,6 @@ with tab_kw:
 
     st.divider()
     
-    # --- GSC URL KAYDI ---
-    # Her proje için GSC URL'si burada tanımlanır, hafızada kalır
-    st.markdown(f"**{st.session_state.active_brand}** İçin Ayarlar")
-    current_gsc = st.session_state.brands[st.session_state.active_brand].get("gsc_url", "")
-    new_gsc = st.text_input("GSC Mülk URL (sc-domain: veya https://)", value=current_gsc)
-    if new_gsc != current_gsc:
-        st.session_state.brands[st.session_state.active_brand]["gsc_url"] = new_gsc
-        st.toast("GSC URL Kaydedildi!")
-
-    st.divider()
-
     # --- KEYWORD RESEARCH TOOL ---
     st.subheader("Anahtar Kelime Analizi")
     kw_col1, kw_col2, kw_col3 = st.columns([3, 1, 1])
@@ -209,74 +181,90 @@ with tab_kw:
                 st.warning("Veri bulunamadı.")
 
 # ==========================================
-# TAB 2: GSC CHATBOT (AI AGENT)
+# TAB 2: GSC CHATBOT (URL AYARI BURADA)
 # ==========================================
 with tab_gsc:
-    active_gsc_url = st.session_state.brands[st.session_state.active_brand].get("gsc_url")
+    active_brand_data = st.session_state.brands[st.session_state.active_brand]
+    current_gsc_url = active_brand_data.get("gsc_url", "")
     
-    if not active_gsc_url:
-        st.warning(f"⚠️ **{st.session_state.active_brand}** projesi için GSC URL tanımlanmamış. Lütfen 'Keyword Research & Proje' sekmesinden ekleyin.")
-    else:
-        st.info(f"🤖 **{st.session_state.active_brand}** Asistanı devrede. Tarih belirtmeden soru sorabilirsiniz (Varsayılan: Son 28 gün).")
+    # URL doluysa expander kapalı, boşsa açık gelsin
+    is_expanded = not bool(current_gsc_url)
 
-        # Chat Geçmişi
+    # --- GSC AYARLARI PANELİ ---
+    with st.expander(f"⚙️ {st.session_state.active_brand} - GSC Ayarları", expanded=is_expanded):
+        st.caption("Chatbot'un verileri okuyabilmesi için GSC Mülk URL'sini girin.")
+        new_gsc_input = st.text_input(
+            "GSC Mülk URL (sc-domain: veya https://)", 
+            value=current_gsc_url,
+            placeholder="sc-domain:example.com",
+            key="gsc_input_field"
+        )
+        
+        # Eğer input değişirse kaydet
+        if new_gsc_input != current_gsc_url:
+            st.session_state.brands[st.session_state.active_brand]["gsc_url"] = new_gsc_input
+            st.success("URL Kaydedildi! Chatbot devreye giriyor...")
+            st.rerun()
+
+    # --- CHATBOT MANTIĞI ---
+    if not new_gsc_input:
+        st.info(f"👋 Merhaba! **{st.session_state.active_brand}** projesi için yukarıdaki panelden GSC URL'sini girerek analize başlayabilirsin.")
+    else:
+        # Chat Başlangıcı
+        if len(st.session_state.messages) == 0:
+            st.info(f"🤖 **{st.session_state.active_brand}** verilerine erişimim var. Bana 'Geçen hafta en çok tıklanan kelimeler neler?' gibi sorular sorabilirsin.")
+
+        # Geçmiş Mesajlar
         for msg in st.session_state.messages:
             st.chat_message(msg["role"]).write(msg["content"])
 
-        # Kullanıcı Girdisi
-        if user_prompt := st.chat_input("Örn: Geçen ayki brand trafiğim nasıldı? En çok tıklanan kelimeler neler?"):
+        # Yeni Mesaj
+        if user_prompt := st.chat_input("GSC Analizi için soru sor..."):
             st.chat_message("user").write(user_prompt)
             st.session_state.messages.append({"role": "user", "content": user_prompt})
             
-            with st.spinner("Tarih algılanıyor ve veri çekiliyor..."):
-                # 1. Adım: Tarih Aralığını AI ile Belirle
+            with st.spinner("Veriler analiz ediliyor..."):
+                # 1. Tarih Tespiti
                 start_d, end_d = extract_dates_from_prompt(user_prompt)
                 
-                # 2. Adım: Veriyi Çek
-                df_gsc = fetch_gsc_data(active_gsc_url, start_d, end_d)
+                # 2. Veri Çekme
+                df_gsc = fetch_gsc_data(new_gsc_input, start_d, end_d)
                 
                 if df_gsc is not None and not df_gsc.empty:
-                    # 3. Adım: Brand / Non-Brand Otomatik Algılama
-                    # Proje adını parçala (Örn: "PlanB Media" -> ["planb", "media"])
+                    # 3. Otomatik Brand/Non-Brand Tespiti
                     brand_name_tokens = st.session_state.active_brand.lower().split()
                     
                     def auto_classify(query):
                         q = str(query).lower()
-                        # Eğer proje adındaki kelimelerden biri sorguda geçiyorsa Brand'dir
                         for token in brand_name_tokens:
-                            if len(token) > 2 and token in q: # 2 harften kısa kelimeleri (ve, ile vs) yoksay
+                            if len(token) > 2 and token in q:
                                 return "Brand"
                         return "Non-Brand"
                     
                     df_gsc['Type'] = df_gsc['Query'].apply(auto_classify)
                     
-                    # 4. Adım: İstatistik Özeti Oluştur
+                    # 4. Özet Çıkarma
                     total_clicks = df_gsc['Clicks'].sum()
                     brand_clicks = df_gsc[df_gsc['Type']=='Brand']['Clicks'].sum()
                     non_brand_clicks = df_gsc[df_gsc['Type']=='Non-Brand']['Clicks'].sum()
                     top_queries = df_gsc.nlargest(15, 'Clicks')[['Query', 'Clicks', 'Type']].to_string(index=False)
                     
                     context_summary = f"""
-                    RAPOR TARİH ARALIĞI: {start_d} ile {end_d}
+                    TARİH ARALIĞI: {start_d} / {end_d}
                     TOPLAM TIKLAMA: {total_clicks}
-                    MARKA (BRAND) TIKLAMA: {brand_clicks}
-                    MARKA DIŞI (NON-BRAND) TIKLAMA: {non_brand_clicks}
-                    
-                    EN İYİ 15 SORGU:
+                    BRAND TIKLAMA: {brand_clicks}
+                    NON-BRAND TIKLAMA: {non_brand_clicks}
+                    EN İYİ SORGULAR:
                     {top_queries}
                     """
                     
-                    # 5. Adım: AI'dan Cevap Al
+                    # 5. AI Cevabı
                     final_prompt = f"""
-                    Sen bir SEO uzmanısın. Kullanıcının sorusunu aşağıdaki verilere dayanarak cevapla.
-                    Marka Adı: {st.session_state.active_brand}
-                    
-                    VERİLER:
-                    {context_summary}
-                    
-                    KULLANICI SORUSU: "{user_prompt}"
-                    
-                    Analitik konuş, rakam ver. Brand ve Non-brand ayrımına dikkat et.
+                    SEO Uzmanı rolündesin. Verilere bak ve yanıtla.
+                    Proje: {st.session_state.active_brand}
+                    Özet Veri: {context_summary}
+                    Soru: "{user_prompt}"
+                    Yorumunda rakamları kullan, profesyonel ol.
                     """
                     
                     try:
@@ -286,8 +274,7 @@ with tab_gsc:
                         reply_text = f"AI Hatası: {e}"
                         
                 else:
-                    reply_text = f"Belirtilen tarihlerde ({start_d} - {end_d}) veri bulunamadı veya GSC erişim hatası."
+                    reply_text = f"❌ {start_d} - {end_d} aralığında veri bulunamadı veya yetki yok."
 
-            # Cevabı yazdır
             st.chat_message("assistant").write(reply_text)
             st.session_state.messages.append({"role": "assistant", "content": reply_text})
