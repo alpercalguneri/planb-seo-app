@@ -5,71 +5,70 @@ import google.generativeai as genai
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import datetime
-from dateutil.relativedelta import relativedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="PlanB Media SEO AI", layout="wide", page_icon="🅱️")
+st.set_page_config(page_title="PlanB Media SEO Agent", layout="wide", page_icon="🅱️")
 
-# --- CSS ---
+# --- CSS VE TASARIM ---
 st.markdown("""
     <style>
     .main > div {padding-top: 1rem;}
     h1 {color: #d32f2f;}
-    div[data-testid="stMetricValue"] {font-size: 1.6rem;}
+    .stTabs [data-baseweb="tab-list"] {gap: 10px;}
+    .stTabs [data-baseweb="tab"] {height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 5px;}
+    .stTabs [aria-selected="true"] {background-color: #d32f2f; color: white;}
+    div[data-testid="stMetricValue"] {font-size: 1.4rem;}
     </style>
     """, unsafe_allow_html=True)
 
 # --- API VE GÜVENLİK ---
 try:
-    # Secrets dosyasından bilgileri al
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
     DFS_LOGIN = st.secrets["DFS_LOGIN"]
     DFS_PASSWORD = st.secrets["DFS_PASSWORD"]
-    
-    # GSC Service Account Bilgileri (Secrets içinde JSON objesi olarak saklanacak)
-    # Streamlit Cloud'da secrets toml formatında olduğu için dict olarak alırız
     gsc_info = st.secrets["gsc_service_account"]
 except Exception as e:
-    st.error(f"Secret hatası: {e}. Lütfen secrets.toml dosyasını yapılandırın.")
+    st.error("Secrets yapılandırması eksik! Lütfen secrets.toml dosyasını kontrol edin.")
     st.stop()
 
-# Gemini Konfigürasyonu
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-2.0-flash') # Daha hızlı ve güncel model varsa onu kullanır
 
 # --- SESSION STATE ---
 if 'brands' not in st.session_state:
     st.session_state.brands = {} 
+
 if 'active_brand' not in st.session_state:
-    st.session_state.active_brand = "Genel"
-    st.session_state.brands["Genel"] = {
-        "context": "Genel SEO", 
+    st.session_state.active_brand = "Varsayılan Proje"
+    st.session_state.brands["Varsayılan Proje"] = {
+        "context": "Genel SEO projesi", 
         "gsc_url": "", 
-        "competitors": ["", "", ""],
-        "brand_keywords": "" # Marka adının varyasyonları
+        "brand_keywords": "",
+        "gsc_data": None, # GSC verisini hafızada tutmak için
+        "gsc_summary": "" # Chatbot'a gidecek özet
     }
+
 if 'messages' not in st.session_state:
     st.session_state.messages = []
 
-# --- YARDIMCI FONKSİYONLAR (GSC) ---
+# --- YARDIMCI FONKSİYONLAR ---
 
 @st.cache_resource
 def get_gsc_service():
-    """Google Search Console API Servisini Başlatır"""
+    """GSC API Servisini başlatır"""
     creds = service_account.Credentials.from_service_account_info(
         gsc_info, scopes=['https://www.googleapis.com/auth/webmasters.readonly']
     )
     return build('searchconsole', 'v1', credentials=creds)
 
-@st.cache_data(ttl=3600)
-def fetch_gsc_data(site_url, start_date, end_date):
-    """Belirli tarih aralığında GSC verisi çeker"""
+def fetch_gsc_data_dynamic(site_url, start_date, end_date):
+    """GSC'den veri çeker (Limit artırıldı)"""
     service = get_gsc_service()
     request = {
-        'startDate': start_date,
-        'endDate': end_date,
-        'dimensions': ['query', 'date'],
-        'rowLimit': 5000
+        'startDate': start_date.strftime("%Y-%m-%d"),
+        'endDate': end_date.strftime("%Y-%m-%d"),
+        'dimensions': ['query'], # Sadece Query bazlı analiz
+        'rowLimit': 25000 # Daha geniş veri seti
     }
     try:
         response = service.searchanalytics().query(siteUrl=site_url, body=request).execute()
@@ -78,7 +77,6 @@ def fetch_gsc_data(site_url, start_date, end_date):
             data = []
             for row in rows:
                 data.append({
-                    'Date': row['keys'][1],
                     'Query': row['keys'][0],
                     'Clicks': row['clicks'],
                     'Impressions': row['impressions'],
@@ -88,12 +86,13 @@ def fetch_gsc_data(site_url, start_date, end_date):
             return pd.DataFrame(data)
         return pd.DataFrame()
     except Exception as e:
+        st.error(f"GSC API Hatası: {e}")
         return None
 
-# --- YARDIMCI FONKSİYONLAR (DataForSEO) ---
 def get_dataforseo_data(keyword, loc, lang):
+    """Keyword Research API"""
     url = "https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_ideas/live"
-    payload = [{"keywords": [keyword], "location_code": loc, "language_code": lang, "limit": 800, "include_seed_keyword": True}]
+    payload = [{"keywords": [keyword], "location_code": loc, "language_code": lang, "limit": 700, "include_seed_keyword": True}]
     try:
         response = requests.post(url, auth=(DFS_LOGIN, DFS_PASSWORD), json=payload)
         res = response.json()
@@ -111,155 +110,217 @@ def get_dataforseo_data(keyword, loc, lang):
             return pd.DataFrame(data)
         return pd.DataFrame()
     except Exception as e:
+        st.error(f"DFS API Hatası: {e}")
         return None
 
-# --- SIDEBAR: MARKA YÖNETİMİ ---
+# --- SIDEBAR: SADECE MARKA SEÇİMİ ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2702/2702602.png", width=50)
-    st.header("🏢 Marka Paneli")
+    st.title("PlanB SEO")
     
+    # Marka Seçimi
     brand_list = list(st.session_state.brands.keys())
-    selected_brand = st.selectbox("Seçili Marka", brand_list, index=brand_list.index(st.session_state.active_brand))
+    selected_brand = st.selectbox("Aktif Proje", brand_list, index=brand_list.index(st.session_state.active_brand))
     
-    # Marka Değişimi Kontrolü
     if selected_brand != st.session_state.active_brand:
         st.session_state.active_brand = selected_brand
-        st.session_state.messages = [] # Chat geçmişini temizle
+        st.session_state.messages = [] # Marka değişirse chat sıfırlanır
         st.rerun()
+        
+    # Yeni Marka Ekle
+    with st.popover("➕ Yeni Proje Ekle"):
+        new_brand = st.text_input("Proje Adı")
+        if st.button("Oluştur") and new_brand:
+            if new_brand not in st.session_state.brands:
+                st.session_state.brands[new_brand] = {"context": "", "gsc_url": "", "brand_keywords": "", "gsc_data": None}
+                st.session_state.active_brand = new_brand
+                st.rerun()
 
-    # Yeni Marka Ekleme
-    new_brand_name = st.text_input("➕ Yeni Marka Ekle")
-    if st.button("Ekle"):
-        if new_brand_name and new_brand_name not in st.session_state.brands:
-            st.session_state.brands[new_brand_name] = {
-                "context": "", "gsc_url": "", "competitors": ["", "", ""], "brand_keywords": ""
-            }
-            st.session_state.active_brand = new_brand_name
-            st.rerun()
-            
-    st.divider()
-    
-    # Aktif Marka Ayarları
-    active_data = st.session_state.brands[st.session_state.active_brand]
-    st.subheader(f"⚙️ {st.session_state.active_brand} Ayarları")
-    
-    gsc_url_input = st.text_input("GSC Mülk URL (sc-domain: veya https://)", value=active_data["gsc_url"], placeholder="sc-domain:altinyildiz.com")
-    brand_kws_input = st.text_input("Marka Kelimeleri (Virgülle ayır)", value=active_data["brand_keywords"], placeholder="altınyıldız, classics")
-    brand_context_input = st.text_area("Marka Özeti", value=active_data["context"])
-    
-    # Kaydet
-    st.session_state.brands[st.session_state.active_brand]["gsc_url"] = gsc_url_input
-    st.session_state.brands[st.session_state.active_brand]["brand_keywords"] = brand_kws_input
-    st.session_state.brands[st.session_state.active_brand]["context"] = brand_context_input
-
+    st.info(f"Şu an **{st.session_state.active_brand}** projesi üzerinde çalışıyorsunuz.")
 
 # --- ANA EKRAN ---
-st.title(f"PlanB Media SEO Agent - {st.session_state.active_brand}")
 
-tab1, tab2 = st.tabs(["🔍 Keyword Research", "🤖 GSC Chatbot"])
+st.title(f"🚀 {st.session_state.active_brand} - SEO Kokpiti")
 
-# --- TAB 1: KEYWORD RESEARCH ---
-with tab1:
-    col1, col2 = st.columns(2)
+tab_kw, tab_gsc = st.tabs(["🔍 Keyword Research", "🤖 GSC Chatbot & Analiz"])
+
+# ==========================================
+# TAB 1: KEYWORD RESEARCH (Tamamen Ayrıldı)
+# ==========================================
+with tab_kw:
+    st.subheader("Anahtar Kelime Araştırması")
+    
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        keyword_input = st.text_input("Anahtar Kelime Ara", "takım elbise")
+        kw_input = st.text_input("Anahtar Kelime", placeholder="Örn: erkek takım elbise")
     with col2:
-        country_map = {"Türkiye": 2792, "ABD": 2840}
-        country = st.selectbox("Hedef Ülke", list(country_map.keys()))
+        country_map = {"Türkiye": 2792, "ABD": 2840, "Almanya": 2276, "İngiltere": 2826}
+        country = st.selectbox("Lokasyon", list(country_map.keys()))
+    with col3:
+        st.write("") # Boşluk
+        btn_analyze = st.button("Analiz Et", type="primary", use_container_width=True)
         
-    if st.button("Analiz Et", type="primary"):
-        with st.spinner("Veriler çekiliyor..."):
-            df = get_dataforseo_data(keyword_input, country_map[country], "tr" if country=="Türkiye" else "en")
-            if df is not None and not df.empty:
-                # Basit filtre
-                df = df[df['Keyword'].str.contains(keyword_input.lower())]
-                st.dataframe(df.sort_values("Volume", ascending=False), use_container_width=True)
+    if btn_analyze and kw_input:
+        with st.spinner("DataForSEO verileri çekiliyor..."):
+            lang = "tr" if country == "Türkiye" else "en"
+            df_kw = get_dataforseo_data(kw_input, country_map[country], lang)
+            
+            if df_kw is not None and not df_kw.empty:
+                # Alaka düzeyi filtresi
+                df_kw = df_kw[df_kw['Keyword'].str.contains(kw_input.lower())]
+                df_kw = df_kw.sort_values("Volume", ascending=False).reset_index(drop=True)
                 
-                # Gemini Önerisi
-                top_kw = ", ".join(df.head(5)['Keyword'].tolist())
-                prompt = f"Anahtar kelimeler: {top_kw}. Marka: {st.session_state.active_brand}. Konsept: {active_data['context']}. Bana 3 tane blog başlığı öner."
-                res = model.generate_content(prompt)
-                st.info(res.text)
+                # Metrikler
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Toplam Kelime", len(df_kw))
+                m2.metric("Toplam Hacim", f"{df_kw['Volume'].sum():,}")
+                m3.metric("En Yüksek Hacim", f"{df_kw['Volume'].max():,}")
+                
+                st.dataframe(df_kw, use_container_width=True, height=400)
+                
+                # AI Yorumu
+                if not df_kw.empty:
+                    top_5 = ", ".join(df_kw.head(5)['Keyword'].tolist())
+                    st.info(f"💡 **AI Önerisi:** En hacimli kelimeler ({top_5}) üzerine odaklanarak kategori ağacını genişletebilirsin.")
             else:
                 st.warning("Veri bulunamadı.")
 
-# --- TAB 2: GSC CHATBOT ---
-with tab2:
-    if not active_data["gsc_url"]:
-        st.warning("⚠️ Lütfen sol menüden GSC Mülk URL'sini girin.")
-    else:
-        st.subheader("📊 Canlı GSC Analizi & Asistan")
+# ==========================================
+# TAB 2: GSC CHATBOT (Inputlar Buraya Taşındı)
+# ==========================================
+with tab_gsc:
+    active_data = st.session_state.brands[st.session_state.active_brand]
+    
+    # --- GSC AYARLARI ---
+    with st.expander("⚙️ GSC Ayarları ve Veri Güncelleme", expanded=True):
+        c_url, c_brand = st.columns(2)
+        with c_url:
+            gsc_url_val = st.text_input("GSC Mülk URL (sc-domain: veya https://)", 
+                                      value=active_data.get("gsc_url", ""), 
+                                      placeholder="sc-domain:example.com")
+        with c_brand:
+            brand_kws_val = st.text_input("Marka Kelimeleri (Virgülle ayır)", 
+                                        value=active_data.get("brand_keywords", ""), 
+                                        placeholder="marka adı, markaadi, brandname")
         
-        # Otomatik Veri Hazırlığı (Son 30 gün vs Geçen Yıl)
-        # Bunu önbelleğe alıp Gemini'ye context olarak vereceğiz.
-        
+        c_date1, c_date2 = st.columns(2)
         today = datetime.date.today()
-        start_date = (today - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
-        end_date = today.strftime("%Y-%m-%d")
+        last_30 = today - datetime.timedelta(days=30)
         
-        # Geçen sene aynı dönem
-        last_year_start = (today - datetime.timedelta(days=395)).strftime("%Y-%m-%d")
-        last_year_end = (today - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+        with c_date1:
+            start_date = st.date_input("Başlangıç Tarihi", value=last_30)
+        with c_date2:
+            end_date = st.date_input("Bitiş Tarihi", value=today)
+            
+        btn_gsc_fetch = st.button("Verileri Getir & Analiz Et", type="primary")
 
-        with st.spinner("GSC verileri analiz ediliyor... (Bu işlem birkaç saniye sürebilir)"):
-            df_current = fetch_gsc_data(active_data["gsc_url"], start_date, end_date)
-            df_last_year = fetch_gsc_data(active_data["gsc_url"], last_year_start, last_year_end)
-        
-        if df_current is not None and not df_current.empty:
-            # Marka / Marka Dışı Ayrımı Hesaplama
-            brand_kws = [k.strip().lower() for k in active_data["brand_keywords"].split(",") if k.strip()]
-            
-            def classify_brand(query):
-                if not brand_kws: return "Genel"
-                return "Marka" if any(b in str(query).lower() for b in brand_kws) else "Marka Dışı"
+    # Ayarları kaydet
+    if gsc_url_val:
+        st.session_state.brands[st.session_state.active_brand]["gsc_url"] = gsc_url_val
+        st.session_state.brands[st.session_state.active_brand]["brand_keywords"] = brand_kws_val
 
-            df_current['Type'] = df_current['Query'].apply(classify_brand)
-            if df_last_year is not None and not df_last_year.empty:
-                df_last_year['Type'] = df_last_year['Query'].apply(classify_brand)
+    # --- VERİ ÇEKME VE İŞLEME ---
+    if btn_gsc_fetch:
+        if not gsc_url_val:
+            st.error("Lütfen GSC URL'sini girin.")
+        else:
+            with st.spinner("GSC verileri çekiliyor ve sınıflandırılıyor..."):
+                df_gsc = fetch_gsc_data_dynamic(gsc_url_val, start_date, end_date)
+                
+                if df_gsc is not None and not df_gsc.empty:
+                    # 1. Brand / Non-Brand Sınıflandırma (Gelişmiş)
+                    brand_tokens = [b.strip().lower() for b in brand_kws_val.split(',') if b.strip()]
+                    
+                    def classify_brand(query):
+                        q_str = str(query).lower()
+                        if not brand_tokens: return "Belirsiz" # Marka kelimesi girilmemişse
+                        # Token'lardan herhangi biri sorgunun içinde geçiyor mu?
+                        if any(token in q_str for token in brand_tokens):
+                            return "Brand"
+                        return "Non-Brand"
+
+                    df_gsc['Type'] = df_gsc['Query'].apply(classify_brand)
+                    
+                    # Veriyi Session State'e kaydet
+                    st.session_state.brands[st.session_state.active_brand]["gsc_data"] = df_gsc
+                    
+                    # 2. İstatistik Hazırlama (AI için Context)
+                    total_clicks = df_gsc['Clicks'].sum()
+                    total_imp = df_gsc['Impressions'].sum()
+                    
+                    # Brand vs Non-Brand
+                    brand_df = df_gsc[df_gsc['Type'] == 'Brand']
+                    nonbrand_df = df_gsc[df_gsc['Type'] == 'Non-Brand']
+                    
+                    brand_clicks = brand_df['Clicks'].sum()
+                    nonbrand_clicks = nonbrand_df['Clicks'].sum()
+                    
+                    top_queries = df_gsc.nlargest(20, 'Clicks')[['Query', 'Clicks', 'Type']].to_string(index=False)
+                    
+                    summary_text = f"""
+                    ANALİZ DÖNEMİ: {start_date} - {end_date}
+                    
+                    GENEL PERFORMANS:
+                    - Toplam Tıklama: {total_clicks:,}
+                    - Toplam Gösterim: {total_imp:,}
+                    
+                    MARKA TRAFİĞİ ANALİZİ (Brand vs Non-Brand):
+                    - Brand Trafiği (Tıklama): {brand_clicks:,} (Oran: %{round(brand_clicks/total_clicks*100, 1) if total_clicks>0 else 0})
+                    - Non-Brand Trafiği (Tıklama): {nonbrand_clicks:,}
+                    
+                    EN ÇOK TRAFİK GETİREN 20 SORGU:
+                    {top_queries}
+                    """
+                    st.session_state.brands[st.session_state.active_brand]["gsc_summary"] = summary_text
+                    st.success("Veriler başarıyla güncellendi! Aşağıdaki Chatbot'u kullanabilirsiniz.")
+                else:
+                    st.warning("Seçilen tarih aralığında veri bulunamadı veya yetki hatası.")
+
+    # --- CHATBOT ARAYÜZÜ ---
+    st.divider()
+    st.subheader("💬 AI Asistan")
+    
+    # Hafızadaki veriyi kontrol et
+    current_df = st.session_state.brands[st.session_state.active_brand].get("gsc_data")
+    summary_context = st.session_state.brands[st.session_state.active_brand].get("gsc_summary")
+
+    if current_df is None:
+        st.info("Lütfen yukarıdan 'Verileri Getir' butonuna basarak analizi başlatın.")
+    else:
+        # Chat Geçmişini Göster
+        for msg in st.session_state.messages:
+            st.chat_message(msg["role"]).write(msg["content"])
+
+        # Yeni Mesaj Girişi
+        if prompt := st.chat_input("Örn: Brand trafiğim toplamın yüzde kaçı? En iyi kelimelerim neler?"):
+            st.chat_message("user").write(prompt)
+            st.session_state.messages.append({"role": "user", "content": prompt})
             
-            # Özet İstatistikler (Gemini Context İçin)
-            total_clicks = df_current['Clicks'].sum()
-            brand_clicks = df_current[df_current['Type']=="Marka"]['Clicks'].sum()
+            # Gemini'ye Context ile Gönder
+            full_prompt = f"""
+            Sen uzman bir SEO Analistisin. Aşağıdaki Google Search Console verilerini analiz ederek kullanıcının sorusunu yanıtla.
             
-            ly_clicks = df_last_year['Clicks'].sum() if df_last_year is not None else 0
-            ly_brand_clicks = df_last_year[df_last_year['Type']=="Marka"]['Clicks'].sum() if df_last_year is not None else 0
+            VERİ ÖZETİ:
+            {summary_context}
             
-            # Veri Özeti Metni
-            data_summary = f"""
-            GSC VERİ ÖZETİ ({start_date} - {end_date}):
-            - Toplam Tıklama: {total_clicks} (Geçen sene aynı dönem: {ly_clicks})
-            - Marka (Brand) Trafiği: {brand_clicks} (Geçen sene: {ly_brand_clicks})
-            - Marka Dışı (Non-Brand) Trafiği: {total_clicks - brand_clicks}
-            - En çok trafik getiren 5 kelime: {', '.join(df_current.groupby('Query')['Clicks'].sum().nlargest(5).index.tolist())}
+            KULLANICI SORUSU:
+            {prompt}
+            
+            YÖNERGELER:
+            1. Cevapların net ve veriye dayalı olsun.
+            2. Yüzdelik hesaplamalar yap.
+            3. Brand ve Non-Brand ayrımına dikkat et.
+            4. Eğer veri özetinde bilgi yoksa (örn: spesifik tek bir kelime), "Elimdeki özet veride bu detay yok ama genel tabloya göre..." şeklinde cevapla.
             """
             
-            # Chat Arayüzü
-            for msg in st.session_state.messages:
-                st.chat_message(msg["role"]).write(msg["content"])
-
-            if user_input := st.chat_input("GSC verileri hakkında soru sor (Örn: Geçen seneye göre marka trafiğim nasıl?)"):
-                st.chat_message("user").write(user_input)
-                st.session_state.messages.append({"role": "user", "content": user_input})
-                
-                # Gemini Prompt
-                full_prompt = f"""
-                Sen bir SEO uzmanısın. Aşağıdaki veri özetini kullanarak kullanıcının sorusunu cevapla.
-                Marka: {st.session_state.active_brand}
-                
-                VERİLER:
-                {data_summary}
-                
-                KULLANICI SORUSU:
-                {user_input}
-                
-                Yorum yaparken profesyonel ol, yüzdelik değişimleri hesapla ve stratejik öneri ver.
-                """
-                
+            with st.spinner("AI düşünüyor..."):
                 try:
-                    ai_response = model.generate_content(full_prompt)
-                    st.chat_message("assistant").write(ai_response.text)
-                    st.session_state.messages.append({"role": "assistant", "content": ai_response.text})
+                    response = model.generate_content(full_prompt)
+                    ai_reply = response.text
+                    st.chat_message("assistant").write(ai_reply)
+                    st.session_state.messages.append({"role": "assistant", "content": ai_reply})
                 except Exception as e:
-                    st.error("AI yanıt veremedi.")
-        else:
-            st.error("GSC verisi çekilemedi. Yetkileri ve URL'i kontrol edin.")
+                    st.error(f"AI Hatası: {e}")
+
+        # Veri Tablosunu Gösterme Opsiyonu (Debug için)
+        with st.expander("📊 Ham Veriyi İncele"):
+            st.dataframe(current_df, use_container_width=True)
