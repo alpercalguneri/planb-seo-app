@@ -2,265 +2,281 @@ import streamlit as st
 import pandas as pd
 import requests
 import google.generativeai as genai
+import time
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
-    page_title="PlanB Media Keyword Research Tool", 
+    page_title="PlanB Media SEO Agent", 
     layout="wide", 
     page_icon="🅱️"
 )
 
-# --- CSS AYARLARI ---
+# --- CSS VE TASARIM ---
 st.markdown("""
     <style>
     .main > div {padding-top: 1rem;}
-    h1 {color: #333333;}
-    .stMetric {background-color: #f9f9f9; padding: 10px; border-radius: 10px; border: 1px solid #eee;}
+    h1 {color: #d32f2f;}
+    .stTextInput > label {font-weight:bold; color: #333;}
+    .stTextArea > label {font-weight:bold; color: #333;}
+    .block-container {padding-top: 2rem;}
+    div[data-testid="stMetricValue"] {font-size: 1.8rem;}
     </style>
     """, unsafe_allow_html=True)
 
-# --- API BİLGİLERİ (SECRETS) ---
+# --- API BİLGİLERİ ---
 try:
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
     DFS_LOGIN = st.secrets["DFS_LOGIN"]
     DFS_PASSWORD = st.secrets["DFS_PASSWORD"]
 except:
-    st.error("Lütfen API anahtarlarınızı secrets.toml dosyasına ekleyin.")
+    st.error("API Anahtarları eksik! Lütfen secrets.toml dosyasını kontrol edin.")
     st.stop()
 
-# Gemini Başlat
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- ÜLKE VE DİL KONFİGÜRASYONU ---
-# Her ülkenin kodu, dili ve o dile ait soru kalıpları
-COUNTRY_CONFIG = {
-    "Türkiye": {
-        "loc": 2792, "lang": "tr", "lang_name": "Turkish",
-        "questions": ["nasıl", "nedir", "ne kadar", "nerede", "kim", "hangi", "kaç", "mı", "mi", "neden", "niye"]
-    },
-    "ABD": {
-        "loc": 2840, "lang": "en", "lang_name": "English",
-        "questions": ["how", "what", "where", "who", "which", "why", "when", "can", "is", "do"]
-    },
-    "İngiltere": {
-        "loc": 2826, "lang": "en", "lang_name": "English",
-        "questions": ["how", "what", "where", "who", "which", "why", "when", "can", "is", "do"]
-    },
-    "Almanya": {
-        "loc": 2276, "lang": "de", "lang_name": "German",
-        "questions": ["wie", "was", "wo", "wer", "warum", "wann", "welche", "kann", "ist"]
-    }
-}
+# --- SESSION STATE (HAFIZA) YÖNETİMİ ---
+# Markaları ve verileri hafızada tutmak için yapı kuruyoruz
+if 'brands' not in st.session_state:
+    st.session_state.brands = {} # { 'MarkaAdi': {'context': '', 'competitors': ['', '', '']} }
+
+if 'active_brand' not in st.session_state:
+    st.session_state.active_brand = "Genel"
+    st.session_state.brands["Genel"] = {"context": "Genel SEO analizi", "competitors": ["", "", ""]}
+
+if 'analysis_trigger' not in st.session_state:
+    st.session_state.analysis_trigger = False
 
 # --- FONKSİYONLAR ---
 
 def get_dataforseo_data(keyword, loc, lang):
-    """
-    DataForSEO'dan veri çeker.
-    """
     url = "https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_ideas/live"
-    
     payload = [{
         "keywords": [keyword], 
         "location_code": loc, 
         "language_code": lang, 
-        "limit": 700, 
+        "limit": 800, # Filtreleme yapacağımız için bol veri çekiyoruz
         "include_seed_keyword": True
     }]
     
     try:
         response = requests.post(url, auth=(DFS_LOGIN, DFS_PASSWORD), json=payload)
         res = response.json()
-
+        
         if response.status_code == 200 and res.get('tasks') and res['tasks'][0]['result']:
             items = res['tasks'][0]['result'][0]['items']
             data = []
-            
             for i in items:
-                # KD'yi artık çeksek de tabloda göstermeyeceğiz, ama filtre için tutabiliriz
-                kw_info = i.get('keyword_info', {})
-                
+                # Sadece gerekli verileri al
                 data.append({
                     "Keyword": i['keyword'],
-                    "Volume": kw_info.get('search_volume', 0),
-                    "CPC": kw_info.get('cpc', 0),
-                    # KD'yi kaldırdık
+                    "Volume": i.get('keyword_info', {}).get('search_volume', 0),
+                    "CPC": i.get('keyword_info', {}).get('cpc', 0),
+                    "Competition": round(i.get('keyword_info', {}).get('competition_level', 0) * 100)
                 })
-            
-            df = pd.DataFrame(data)
-            return df
-        else:
-            return pd.DataFrame()
-            
+            return pd.DataFrame(data)
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"API Hatası: {e}")
         return None
 
-def filter_keywords(df, match_type, seed_keyword, question_list):
+def strict_filter(df, seed_keyword, brand_context):
     """
-    Filtreleme Mantığı (Dinamik Soru Listesi ile)
+    Kullanıcının şikayet ettiği 'pantolon aradım elbise geldi' sorununu çözer.
+    Ayrıca Marka Tanımı'na (Context) göre alakasızları eler (Basit kural bazlı).
     """
-    if df.empty:
-        return df
-        
+    if df.empty: return df
+    
     seed_lower = seed_keyword.lower()
     
-    if match_type == "Phrase Match (Sıralı)":
-        return df[df['Keyword'].str.contains(seed_lower, na=False)]
-        
-    elif match_type == "Exact Match (Tam)":
-        return df[df['Keyword'] == seed_lower]
-        
-    elif match_type == "Questions (Sorular)":
-        # Sadece seçilen ülkenin soru kalıplarını ve ana kelimeyi içerenleri getir
-        # Örn: "iphone fiyatı nedir" (Hem iphone hem nedir içermeli ki alakalı olsun)
-        
-        # 1. Adım: Soru kelimelerinden en az biri geçmeli
-        mask_questions = df['Keyword'].str.contains('|'.join(question_list), na=False, case=False)
-        
-        # 2. Adım: Anahtar kelime de içinde geçmeli (Alaka düzeyi için)
-        mask_seed = df['Keyword'].str.contains(seed_lower, na=False)
-        
-        return df[mask_questions & mask_seed]
-        
-    else: # Broad Match
-        return df
+    # 1. KURAL: KELİME KESİNLİKLE İÇİNDE GEÇMELİ (Strict Broad Match)
+    # Pantolon arıyorsa içinde 'pantolon' geçmeyen her şeyi sileriz.
+    df = df[df['Keyword'].str.contains(seed_lower, na=False)]
+    
+    # 2. KURAL: MARKA BAĞLAMI (Opsiyonel AI filtresi yerine basit negatif filtre)
+    # Eğer marka context'inde "Erkek Giyim" yazıyorsa, "Kadın" kelimesini içerenleri eleyebiliriz vb.
+    # (Burayı performans için şimdilik manuel filtre gibi tutuyoruz, ileride AI ile her satır kontrol edilebilir)
+    
+    return df
 
-# --- ARAYÜZ ---
+# --- SIDEBAR: MARKA YÖNETİMİ ---
 
-# 1. LOGO YERLEŞİMİ
-# 'logo.png' dosyasının main.py ile aynı klasörde olması lazım.
-col_logo, col_title = st.columns([1, 4])
-with col_logo:
-    try:
-        st.image("logo.png", width=180) 
-    except:
-        st.warning("logo.png bulunamadı.") # Dosya yoksa uyarı verir ama çökmez
-
-with col_title:
-    st.title("Keyword Research Tool (V1.0)")
-    st.markdown("Powered by **DataForSEO** & **Gemini AI**")
-
-st.divider()
-
-# Sidebar
 with st.sidebar:
-    st.header("Analiz Parametreleri")
+    st.header("🏢 Marka Yönetimi")
     
-    keyword_input = st.text_input("Anahtar Kelime", "iphone 15")
-    url_input = st.text_input("Hedef URL (Opsiyonel)", "")
+    # Marka Seçimi / Oluşturma
+    brand_list = list(st.session_state.brands.keys())
+    selected_brand = st.selectbox("Çalışılan Marka", brand_list, index=brand_list.index(st.session_state.active_brand))
     
-    # Ülke Seçimi
-    country_selected = st.selectbox("Hedef Ülke", list(COUNTRY_CONFIG.keys()))
+    # Yeni Marka Ekleme
+    new_brand_name = st.text_input("➕ Yeni Marka Ekle", placeholder="Örn: Altınyıldız Classics")
+    if st.button("Markayı Oluştur"):
+        if new_brand_name and new_brand_name not in st.session_state.brands:
+            st.session_state.brands[new_brand_name] = {"context": "", "competitors": ["", "", ""]}
+            st.session_state.active_brand = new_brand_name
+            st.rerun()
     
-    # Seçilen ülkenin ayarlarını al
-    settings = COUNTRY_CONFIG[country_selected]
+    # Aktif Markayı Güncelle
+    if selected_brand != st.session_state.active_brand:
+        st.session_state.active_brand = selected_brand
+        st.rerun()
+
+    st.divider()
+    
+    # Marka Detayları (Hafızaya Kaydedilir)
+    active_data = st.session_state.brands[st.session_state.active_brand]
+    
+    st.subheader(f"📝 {st.session_state.active_brand} Bilgileri")
+    
+    # Context Input
+    brand_context = st.text_area(
+        "Marka Tanımı & Hedef Kitle", 
+        value=active_data["context"],
+        placeholder="Biz kimiz? Hedef kitlemiz kim? Neyi satıyoruz?",
+        height=100
+    )
+    
+    # Competitor Inputs
+    st.write("⚔️ Rakipler")
+    comp1 = st.text_input("Rakip 1", value=active_data["competitors"][0], key="c1")
+    comp2 = st.text_input("Rakip 2", value=active_data["competitors"][1], key="c2")
+    comp3 = st.text_input("Rakip 3", value=active_data["competitors"][2], key="c3")
+    
+    # Bilgileri Kaydet (Her değişiklikte session güncellenir)
+    st.session_state.brands[st.session_state.active_brand]["context"] = brand_context
+    st.session_state.brands[st.session_state.active_brand]["competitors"] = [comp1, comp2, comp3]
     
     st.divider()
     
-    # Match Type Seçici
-    match_type = st.radio(
-        "Eşleme Türü (Filtre)",
-        ["Broad Match (Geniş)", "Phrase Match (Sıralı)", "Exact Match (Tam)", "Questions (Sorular)"],
-        index=0,
-        help="Questions: Sadece seçilen dildeki soru kalıplarını (örn: nedir, how, wie) içeren kelimeleri getirir."
-    )
-    
-    btn_analyze = st.button("Analizi Başlat", type="primary")
+    # Analiz Girdileri
+    # Session state kullanarak tıklanan kelimeyi buraya taşıyacağız
+    if 'keyword_input_val' not in st.session_state:
+        st.session_state.keyword_input_val = "keten pantolon"
 
-# Ana Akış
-if btn_analyze:
-    if not DFS_PASSWORD or "BURAYA" in DFS_PASSWORD:
-        st.error("API Şifreleri girilmemiş.")
-    else:
-        with st.spinner(f"🚀 {country_selected} verileri taranıyor..."):
+    keyword_input = st.text_input("Anahtar Kelime", key="keyword_input_val")
+    
+    country_map = {"Türkiye": 2792, "ABD": 2840, "Almanya": 2276}
+    country = st.selectbox("Hedef Ülke", list(country_map.keys()))
+    
+    analyze_btn = st.button("Analizi Başlat", type="primary")
+
+# --- ANA EKRAN ---
+
+# Logo
+col_logo, col_header = st.columns([1, 5])
+with col_logo:
+    try:
+        st.image("logo.png", width=150)
+    except:
+        st.write("🅱️")
+with col_header:
+    st.title("PlanB Media SEO Agent V10.0")
+    st.caption(f"Aktif Oturum: **{st.session_state.active_brand}**")
+
+# Analiz Tetikleyici (Buton veya Tablo Tıklaması)
+if analyze_btn:
+    st.session_state.analysis_trigger = True
+
+if st.session_state.analysis_trigger:
+    with st.spinner(f"🚀 {st.session_state.active_brand} için veriler ve rakipler analiz ediliyor..."):
+        
+        # 1. API VERİ ÇEKME
+        raw_df = get_dataforseo_data(keyword_input, country_map[country], "tr" if country=="Türkiye" else "en")
+        
+        if raw_df is not None and not raw_df.empty:
             
-            # 1. Veriyi Çek
-            raw_df = get_dataforseo_data(keyword_input, settings["loc"], settings["lang"])
+            # 2. STRICT FILTERING (Pantolon -> Elbise sorununu çözen yer)
+            # Marka context'i de fonksiyona gönderiyoruz
+            df_filtered = strict_filter(raw_df, keyword_input, brand_context)
             
-            if raw_df is not None and not raw_df.empty:
-                # 2. Filtrele (Dinamik soru listesini gönderiyoruz)
-                df_filtered = filter_keywords(raw_df, match_type, keyword_input, settings["questions"])
+            # Hacme göre sırala
+            df_filtered = df_filtered.sort_values(by="Volume", ascending=False).reset_index(drop=True)
+            
+            # METRİKLER
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Toplam Kelime", len(df_filtered))
+            c2.metric("Toplam Hacim", f"{df_filtered['Volume'].sum():,}")
+            c3.metric("En Popüler", df_filtered.iloc[0]['Keyword'] if not df_filtered.empty else "-")
+            
+            st.divider()
+            
+            # 3. ETKİLEŞİMLİ TABLO (Click to Analyze)
+            st.subheader("📋 Anahtar Kelime Listesi (Tıklanabilir)")
+            st.info("💡 Tablodaki herhangi bir kelimenin solundaki kutucuğa veya satıra tıklayarak o kelime için yeni analiz başlatabilirsiniz.")
+            
+            # Streamlit Dataframe Selection Event
+            event = st.dataframe(
+                df_filtered,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun", # Seçim yapılınca sayfayı yenile
+                selection_mode="single-row", # Tek satır seçimi
+                column_config={
+                    "Keyword": "Anahtar Kelime",
+                    "Volume": st.column_config.NumberColumn("Hacim", format="%d"),
+                    "CPC": st.column_config.NumberColumn("CPC", format="$%.2f"),
+                    "Competition": st.column_config.ProgressColumn("Rekabet", min_value=0, max_value=100)
+                },
+                height=400
+            )
+            
+            # Seçim Kontrolü
+            if len(event.selection.rows) > 0:
+                selected_index = event.selection.rows[0]
+                new_keyword = df_filtered.iloc[selected_index]["Keyword"]
                 
-                # Sıralama
-                df_filtered = df_filtered.sort_values(by="Volume", ascending=False).reset_index(drop=True)
+                # Eğer seçilen kelime mevcut inputtan farklıysa güncelle ve yenile
+                if new_keyword != st.session_state.keyword_input_val:
+                    st.session_state.keyword_input_val = new_keyword
+                    st.rerun()
+
+            st.divider()
+            
+            # 4. CONTENT GAP & RAKİP ANALİZLİ AI STRATEJİSİ
+            st.subheader(f"🧠 {st.session_state.active_brand} İçerik Planlayıcısı")
+            
+            # Verileri Hazırla
+            top_10_kws = ", ".join(df_filtered.head(10)['Keyword'].tolist())
+            competitors_txt = ", ".join([c for c in active_data["competitors"] if c])
+            
+            prompt = f"""
+            Sen PlanB Media'nın Kıdemli SEO Danışmanısın.
+            
+            MARKAMIZ HAKKINDA BİLGİ (CONTEXT):
+            {active_data['context']}
+            
+            RAKİPLERİMİZ:
+            {competitors_txt if competitors_txt else "Belirtilmedi"}
+            
+            ANALİZ EDİLEN KONU: {keyword_input}
+            BULUNAN EN HACİMLİ KELİMELER: {top_10_kws}
+            
+            GÖREV:
+            Rakiplerimizi ve markamızı göz önünde bulundurarak bir 'Content Gap' (İçerik Boşluğu) analizi yap.
+            Rakiplerin muhtemelen hedeflediği ama bizim bu kelimelerle daha iyi yapabileceğimiz 5 adet İçerik Fikri ver.
+            
+            Lütfen şu formatta yanıt ver:
+            
+            ### 🚀 Stratejik Fırsat Analizi
+            (Markamızın bu kelimelerde rakiplere göre avantajı veya eksiği hakkında 2 cümlelik yorum)
+            
+            ### 📝 Önerilen İçerik Planı
+            
+            1. [Başlık Önerisi]
+               - 🎯 Hedef Kelime: [Listeden seç]
+               - ⚔️ Rekabet Avantajı: (Rakiplerden farklı olarak ne sunmalıyız? Neden bu içerik bizi öne geçirir?)
+               
+            (Toplam 5 madde)
+            """
+            
+            try:
+                response = model.generate_content(prompt)
+                st.markdown(response.text)
+            except Exception as e:
+                st.warning("AI şu an yanıt veremiyor.")
                 
-                if df_filtered.empty:
-                    st.warning(f"'{match_type}' kriterine uygun kelime bulunamadı.")
-                else:
-                    # 3. Metrikler
-                    c1, c2, c3 = st.columns(3)
-                    
-                    c1.metric("Listelenen Kelime", len(df_filtered))
-                    c1.markdown(f"<small>Dil: {settings['lang_name']} | Filtre: {match_type}</small>", unsafe_allow_html=True)
-                    
-                    c2.metric("Toplam Hacim", f"{df_filtered['Volume'].sum():,}")
-                    
-                    top_kw = df_filtered.iloc[0]['Keyword']
-                    c3.metric("En Popüler", top_kw)
-                    
-                    st.divider()
-                    
-                    # 4. Tablo (KD Çıkarıldı)
-                    st.subheader("📋 Anahtar Kelime Listesi")
-                    
-                    st.dataframe(
-                        df_filtered,
-                        use_container_width=True,
-                        column_config={
-                            "Keyword": "Anahtar Kelime",
-                            "Volume": st.column_config.NumberColumn("Hacim", format="%d"),
-                            "CPC": st.column_config.NumberColumn("CPC ($)", format="$%.2f")
-                        },
-                        height=500
-                    )
-                    
-                    # CSV İndirme
-                    csv = df_filtered.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Listeyi CSV Olarak İndir",
-                        data=csv,
-                        file_name=f"planb_{keyword_input}_{settings['lang']}.csv",
-                        mime="text/csv"
-                    )
-                    
-                    # 5. AI Analizi (GELİŞMİŞ PROMPT)
-                    st.divider()
-                    st.subheader(f"🤖 PlanB AI Stratejisi ({country_selected})")
-                    
-                    top_5_rel = ", ".join(df_filtered.head(5)['Keyword'].tolist())
-                    url_context = f"Web Sitesi: {url_input}" if url_input else ""
-                    
-                    prompt = f"""
-                    Sen PlanB Media ajansının Global SEO Stratejistisin.
-                    
-                    ANALİZ DETAYLARI:
-                    - Hedef Ülke: {country_selected}
-                    - Konu: {keyword_input}
-                    - {url_context}
-                    - En Hacimli Kelimeler: {top_5_rel}
-                    
-                    GÖREV:
-                    Bu verileri ve {country_selected} ülkesindeki güncel trendleri düşünerek 5 adet Blog Başlığı öner.
-                    
-                    KURALLAR:
-                    1. Başlıklar kesinlikle {settings['lang_name']} ({settings['lang'].upper()}) dilinde olmalı.
-                    2. "Neden?" açıklamaları kesinlikle TÜRKÇE olmalı.
-                    3. Başlıklar {country_selected} kullanıcılarının arama niyetine ve trendlerine uygun olmalı.
-                    
-                    ÇIKTI FORMATI:
-                    1. [Başlık ({settings['lang_name']})]
-                       - 🎯 Odak: [Anahtar Kelime]
-                       - 💡 Neden: [Türkçe stratejik açıklama]
-                    
-                    (Toplam 5 tane)
-                    """
-                    
-                    try:
-                        response = model.generate_content(prompt)
-                        st.info(response.text)
-                    except Exception as e:
-                        st.warning(f"AI Yanıtı alınamadı: {e}")
-            else:
-                st.error("Veri bulunamadı. Lütfen kelimeyi veya ülkeyi kontrol edin.")
+        else:
+            st.warning("Veri bulunamadı. Lütfen kelimeyi kontrol edin.")
+            
+    # Analiz bittiğinde trigger'ı kapatmıyoruz ki sonuçlar ekranda kalsın.
+    # Ancak yeni arama yapılınca yukarıdaki logic tekrar çalışacak.
