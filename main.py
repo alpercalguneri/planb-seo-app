@@ -32,7 +32,7 @@ except Exception as e:
     st.stop()
 
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash') 
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- SESSION STATE ---
 if 'brands' not in st.session_state:
@@ -278,3 +278,4 @@ with tab_gsc:
 
             st.chat_message("assistant").write(reply_text)
             st.session_state.messages.append({"role": "assistant", "content": reply_text})
+
