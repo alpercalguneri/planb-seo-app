@@ -43,7 +43,7 @@ except Exception as e:
 
 # AI Modelini Başlat
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash') # Hız ve mantık için 1.5 Flash ideal
+model = genai.GenerativeModel('gemini-2.5-flash') # Hız ve mantık için 1.5 Flash ideal
 
 # --- FONKSİYONLAR ---
 
@@ -315,3 +315,4 @@ elif app_mode == "🤖 GSC AI Chatbot":
                             st.markdown(ai_reply)
                     except Exception as e:
                         st.error(f"AI Analiz Hatası: {e}")
+
