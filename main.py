@@ -307,57 +307,119 @@ if app_mode == "🔍 Keyword Research (Pro)":
 # ======================================================
 # MOD 2: GSC AI CHATBOT
 # ======================================================
+# ======================================================
+# MOD 2: GSC AI CHATBOT (BAĞLAM ÖZELLİKLİ)
+# ======================================================
 elif app_mode == "🤖 GSC AI Chatbot":
     st.title("🤖 GSC AI Data Analyst")
     
-    # Input area
     col_gsc1, col_gsc2 = st.columns([3, 1])
     with col_gsc1:
         gsc_property = st.text_input("GSC Mülk URL'si", placeholder="sc-domain:markam.com")
     with col_gsc2:
         if st.button("Sohbeti Temizle"):
             st.session_state.messages = []
-            st.session_state.current_gsc_data_range = None
+            st.session_state.active_date_range = None # Tarih hafızasını da sil
             st.rerun()
     
+    # Session State Tanımları
     if "messages" not in st.session_state: st.session_state.messages = []
-    if "current_gsc_data_range" not in st.session_state: st.session_state.current_gsc_data_range = None
     if "gsc_dataframe" not in st.session_state: st.session_state.gsc_dataframe = None
+    # Aktif tarih aralığını tutmak için yeni state:
+    if "active_date_range" not in st.session_state: 
+        # Varsayılan: Son 28 gün
+        end = datetime.date.today()
+        start = end - datetime.timedelta(days=28)
+        st.session_state.active_date_range = (str(start), str(end))
 
-    # Mesajları göster
+    # Mesajları Ekrana Bas
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Chat Input
-    if prompt := st.chat_input("Verilerinle ilgili soru sor... (Örn: Geçen ay en çok tıklanan sayfalarım hangileri?)"):
+    # --- CHAT INPUT ---
+    if prompt := st.chat_input("Verilerinle ilgili soru sor..."):
         if not gsc_property:
             st.error("Lütfen önce GSC Mülk adresini girin.")
         else:
-            # Kullanıcı mesajını ekle
+            # 1. Kullanıcı mesajını ekle
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
 
-            with st.spinner("Veriler analiz ediliyor..."):
-                # Tarih aralığını belirle
-                start_date, end_date = extract_date_range_from_prompt(prompt)
-                current_range_key = f"{gsc_property}|{start_date}|{end_date}"
+            with st.spinner("Analiz ediliyor..."):
+                # 2. Tarih Kontrolü: Yeni tarih istendi mi?
+                new_dates = extract_date_range_from_prompt(prompt)
                 
-                # Veri daha önce çekilmediyse veya tarih değiştiyse çek
-                if st.session_state.current_gsc_data_range != current_range_key:
+                if new_dates:
+                    # Evet, kullanıcı tarihi değiştirmek istedi
+                    start_date, end_date = new_dates
+                    st.session_state.active_date_range = (start_date, end_date)
+                    data_needs_refresh = True
+                    date_info_msg = f"📅 Tarih aralığı güncellendi: **{start_date} / {end_date}**"
+                else:
+                    # Hayır, eski tarihi kullanmaya devam et
+                    start_date, end_date = st.session_state.active_date_range
+                    # Eğer daha önce hiç veri çekilmediyse mecbur çekeceğiz
+                    data_needs_refresh = (st.session_state.gsc_dataframe is None)
+                    date_info_msg = None
+
+                # 3. Veri Çekme (Sadece gerekliyse veya tarih değiştiyse)
+                # Mevcut veri hafızadakiyle aynı tarih mi kontrolü:
+                current_key = f"{gsc_property}|{start_date}|{end_date}"
+                last_key = st.session_state.get("last_fetched_key", "")
+
+                if current_key != last_key:
                     df_gsc = get_gsc_raw_data(gsc_property, start_date, end_date)
-                    
                     if df_gsc is not None and not df_gsc.empty:
                         st.session_state.gsc_dataframe = df_gsc
-                        st.session_state.current_gsc_data_range = current_range_key
-                        system_msg = f"✅ **{start_date}** ile **{end_date}** arasındaki veriler yüklendi. Analize başlıyorum."
-                        st.session_state.messages.append({"role": "assistant", "content": system_msg})
-                        with st.chat_message("assistant"): st.markdown(system_msg)
+                        st.session_state.last_fetched_key = current_key
+                        if date_info_msg: # Sadece tarih değiştiyse bilgi ver
+                             st.session_state.messages.append({"role": "assistant", "content": date_info_msg})
+                             with st.chat_message("assistant"): st.info(date_info_msg)
                     else:
-                        err_msg = "❌ Belirtilen tarih veya mülk için veri bulunamadı. Yetkileri kontrol edin."
-                        st.session_state.messages.append({"role": "assistant", "content": err_msg})
-                        with st.chat_message("assistant"): st.error(err_msg)
+                        st.error("Veri bulunamadı.")
                         st.stop()
+
+                # 4. AI Yanıtı Hazırlama (Bağlam Oluşturma)
+                if st.session_state.gsc_dataframe is not None:
+                    df = st.session_state.gsc_dataframe
+                    
+                    # Veri Özeti
+                    summary_stats = f"Dönem: {start_date} - {end_date} | Toplam Tık: {df['Clicks'].sum()} | Ort. Poz: {df['Position'].mean():.1f}"
+                    top_queries = df.nlargest(50, 'Clicks')[['Query', 'Clicks', 'Impressions', 'Position']].to_markdown(index=False)
+                    
+                    # Sohbet Geçmişini Metne Dökme (CONTEXT)
+                    # Son 4 mesajı alıyoruz ki token dolmasın ama bağlam korunsun
+                    chat_history_text = ""
+                    for m in st.session_state.messages[-4:]: 
+                        role_name = "Kullanıcı" if m['role'] == 'user' else "Sen (AI SEO Uzmanı)"
+                        chat_history_text += f"{role_name}: {m['content']}\n"
+
+                    ai_prompt = f"""
+                    Sen profesyonel bir SEO Analistisin. Aşağıdaki verilere ve SOHBET GEÇMİŞİNE bakarak cevap ver.
+                    
+                    📊 AKTİF VERİ SETİ ÖZETİ:
+                    {summary_stats}
+                    
+                    🔎 EN ÇOK TIKLANAN KELİMELER (DATA):
+                    {top_queries}
+                    
+                    💬 SOHBET GEÇMİŞİ (Bağlamı buradan anla):
+                    {chat_history_text}
+                    
+                    Son Soru: {prompt}
+                    
+                    Cevap (Kısa, net ve veriye dayalı):
+                    """
+                    
+                    try:
+                        # Retry fonksiyonunu kullanıyoruz (önceki adımda eklemiştik)
+                        res = generate_safe(ai_prompt) 
+                        if res:
+                            st.session_state.messages.append({"role": "assistant", "content": res.text})
+                            with st.chat_message("assistant"): st.markdown(res.text)
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
                 
                 # AI Analizi
                 if st.session_state.gsc_dataframe is not None:
@@ -396,6 +458,7 @@ elif app_mode == "🤖 GSC AI Chatbot":
                         with st.chat_message("assistant"): st.markdown(res.text)
                     except Exception as e:
                         st.error(f"AI Yanıt Üretme Hatası: {e}")
+
 
 
 
