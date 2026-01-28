@@ -14,19 +14,21 @@ st.set_page_config(page_title="PlanB Media SEO AI", layout="wide", page_icon="�
 st.markdown("""
     <style>
     .main > div {padding-top: 2rem;}
-    .stChatInput {position: fixed; bottom: 3rem;}
-    .block-container {padding-bottom: 5rem;}
+    .stChatInput {position: fixed; bottom: 3rem; z-index: 100;}
+    .block-container {padding-bottom: 7rem;}
     h1 {color: #d32f2f;}
     div[data-testid="stMetric"] {
         background-color: #f8f9fa;
         border-radius: 10px;
         padding: 10px;
         border: 1px solid #e0e0e0;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- API BİLGİLERİ ---
+# --- API BİLGİLERİ VE KURULUM ---
+# Hata yönetimi ile secrets kontrolü
 try:
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
     DFS_LOGIN = st.secrets["DFS_LOGIN"]
@@ -45,16 +47,17 @@ try:
         "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{st.secrets['GSC_CLIENT_EMAIL']}"
     }
 except Exception as e:
-    st.error(f"Secret Hatası: {e}. Lütfen .streamlit/secrets.toml dosyasını kontrol edin.")
+    st.error(f"🚨 Secret Hatası: {e}. Lütfen .streamlit/secrets.toml dosyasını kontrol edin.")
     st.stop()
 
-# AI Model
+# AI Model Konfigürasyonu
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash') # Güncel ve hızlı model
 
 # --- YARDIMCI FONKSİYONLAR ---
 
 def classify_intent(keyword):
+    """Kelime niyetini basit kurallarla sınıflandırır."""
     k = keyword.lower()
     if any(x in k for x in ['satın al', 'fiyat', 'ucuz', 'sipariş', 'kiralık', 'buy', 'price']):
         return "Transactional (İşlem)"
@@ -65,25 +68,31 @@ def classify_intent(keyword):
     else:
         return "Navigational/General"
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def extract_date_range_from_prompt(user_prompt):
+    """Kullanıcı girdisinden tarih aralığını AI ile çıkarır."""
     today = datetime.date.today()
     prompt = f"""
     Bugünün tarihi: {today}
     Kullanıcı Girdisi: "{user_prompt}"
-    GÖREV: Tarih aralığını çıkar.
-    ÇIKTI FORMATI: "YYYY-MM-DD|YYYY-MM-DD"
+    GÖREV: Tarih aralığını çıkar. Eğer kullanıcı spesifik tarih vermediyse 'son 28 gün' varsay.
+    ÇIKTI FORMATI: Sadece "YYYY-MM-DD|YYYY-MM-DD" döndür. Başka metin yazma.
     """
     try:
         response = model.generate_content(prompt)
         dates = response.text.strip().split('|')
         if len(dates) == 2:
-            return dates[0], dates[1]
+            return dates[0].strip(), dates[1].strip()
     except:
         pass
+    
+    # Fallback (Hata durumunda son 28 gün)
     start = today - datetime.timedelta(days=28)
     return str(start), str(today)
 
+@st.cache_data(ttl=3600) # 1 Saatlik Önbellekleme
 def get_gsc_raw_data(site_url, start_date, end_date):
+    """Google Search Console verilerini çeker."""
     try:
         creds = service_account.Credentials.from_service_account_info(
             GSC_CREDENTIALS, scopes=['https://www.googleapis.com/auth/webmasters.readonly']
@@ -93,9 +102,10 @@ def get_gsc_raw_data(site_url, start_date, end_date):
             'startDate': start_date,
             'endDate': end_date,
             'dimensions': ['query', 'page'], 
-            'rowLimit': 1000 
+            'rowLimit': 2000 # Limit artırıldı
         }
         response = service.searchanalytics().query(siteUrl=site_url, body=request).execute()
+        
         if 'rows' in response:
             data = []
             for row in response['rows']:
@@ -110,9 +120,13 @@ def get_gsc_raw_data(site_url, start_date, end_date):
             return pd.DataFrame(data)
         return pd.DataFrame()
     except Exception as e:
+        # Hata detayını return etmiyoruz, UI tarafında handle edilecek
+        print(f"GSC Error: {e}")
         return None
 
+@st.cache_data(ttl=86400) # 24 Saatlik Önbellekleme (Veri sık değişmez)
 def get_dfs_data(keyword, loc, lang):
+    """DataForSEO API'den kelime verilerini çeker."""
     url = "https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_ideas/live"
     payload = [{
         "keywords": [keyword], 
@@ -125,26 +139,33 @@ def get_dfs_data(keyword, loc, lang):
     try:
         response = requests.post(url, auth=(DFS_LOGIN, DFS_PASSWORD), json=payload)
         res = response.json()
-        if response.status_code == 200 and res.get('tasks') and res['tasks'][0]['result']:
-            items = res['tasks'][0]['result'][0]['items']
-            data = []
-            for i in items:
-                kw_info = i.get('keyword_info', {})
-                kd = i.get('keyword_properties', {}).get('keyword_difficulty', kw_info.get('competition_index', 0))
-                data.append({
-                    "Keyword": i['keyword'],
-                    "Volume": kw_info.get('search_volume', 0),
-                    "CPC": kw_info.get('cpc', 0),
-                    "KD %": kd, 
-                    "Competition": kw_info.get('competition_level', 'Unknown')
-                })
-            df = pd.DataFrame(data)
-            if not df.empty:
-                df['Intent'] = df['Keyword'].apply(classify_intent)
-            return df
-        return pd.DataFrame()
+        
+        if response.status_code == 200:
+            if res.get('tasks') and res['tasks'][0]['result']:
+                items = res['tasks'][0]['result'][0]['items']
+                data = []
+                for i in items:
+                    kw_info = i.get('keyword_info', {})
+                    if kw_info is None: continue # Nadir durum kontrolü
+                    
+                    kd = i.get('keyword_properties', {}).get('keyword_difficulty', kw_info.get('competition_index', 0))
+                    data.append({
+                        "Keyword": i['keyword'],
+                        "Volume": kw_info.get('search_volume', 0),
+                        "CPC": kw_info.get('cpc', 0),
+                        "KD %": kd, 
+                        "Competition": kw_info.get('competition_level', 'Unknown')
+                    })
+                df = pd.DataFrame(data)
+                if not df.empty:
+                    df['Intent'] = df['Keyword'].apply(classify_intent)
+                return df
+            else:
+                return pd.DataFrame() # Sonuç yoksa boş DF
+        else:
+            return None # API hatası
     except Exception as e:
-        st.error(f"API Hatası: {e}")
+        st.error(f"API Bağlantı Hatası: {e}")
         return None
 
 # --- SIDEBAR ---
@@ -153,15 +174,16 @@ with st.sidebar:
     st.markdown("---")
     app_mode = st.radio("Mod Seçimi", ["🔍 Keyword Research (Pro)", "🤖 GSC AI Chatbot"])
     st.markdown("---")
-    st.caption("In-House Tool v2.3")
+    st.info("💡 **İpucu:** GSC Modu için chat kısmına 'Geçen hafta en çok düşen kelimeler neler?' gibi sorular sorabilirsiniz.")
+    st.caption("In-House Tool v2.4")
 
 # ======================================================
-# MOD 1: KEYWORD RESEARCH (PRO) - GÜNCELLENMİŞ AI PROMPT
+# MOD 1: KEYWORD RESEARCH (PRO)
 # ======================================================
 if app_mode == "🔍 Keyword Research (Pro)":
     st.title("🔍 Keyword Magic Tool")
     
-    # Session State
+    # Session State Initialization
     if "df_search_results" not in st.session_state:
         st.session_state.df_search_results = None
     if "analyzed_keyword" not in st.session_state:
@@ -190,6 +212,7 @@ if app_mode == "🔍 Keyword Research (Pro)":
         if keyword_input:
             with st.spinner(f"'{keyword_input}' taranıyor..."):
                 lang = "tr" if country == "Türkiye" else "en"
+                # Cacheli fonksiyon çağrısı
                 raw_df = get_dfs_data(keyword_input, country_map[country], lang)
                 
                 if raw_df is not None and not raw_df.empty:
@@ -199,8 +222,11 @@ if app_mode == "🔍 Keyword Research (Pro)":
                     raw_df = raw_df.sort_values(by="Volume", ascending=False).reset_index(drop=True)
                     st.session_state.df_search_results = raw_df
                     st.session_state.analyzed_keyword = keyword_input
+                    st.rerun() # Veri geldiğinde sayfayı yenile
+                elif raw_df is None:
+                    st.error("API yanıt vermedi. Lütfen tekrar deneyin.")
                 else:
-                    st.error("Veri bulunamadı.")
+                    st.warning("Bu kelime için veri bulunamadı.")
         else:
             st.warning("Lütfen bir anahtar kelime girin.")
 
@@ -213,17 +239,19 @@ if app_mode == "🔍 Keyword Research (Pro)":
         m1.metric("Kelime Sayısı", len(df))
         m2.metric("Toplam Hacim", f"{df['Volume'].sum():,}")
         m3.metric("Ort. KD %", round(df['KD %'].mean(), 1))
-        m4.metric("Potansiyel Trafik", f"{(df['Volume'].sum() * 0.45):,.0f}")
+        # Potansiyel trafik tahmini: Toplam hacim * ortalama CTR (0.3 varsayım)
+        m4.metric("Potansiyel Trafik", f"{(df['Volume'].sum() * 0.3):,.0f}")
         
         # Grafik
-        chart_data = df.head(50)
+        chart_data = df.head(100) # Performans için limit
         scatter = alt.Chart(chart_data).mark_circle().encode(
             x=alt.X('KD %', title='Keyword Difficulty'),
-            y=alt.Y('Volume', title='Volume'),
+            y=alt.Y('Volume', title='Search Volume'),
             size='CPC',
-            color='Intent',
-            tooltip=['Keyword', 'Volume', 'KD %', 'CPC']
-        ).properties(height=350).interactive()
+            color=alt.Color('Intent', scale=alt.Scale(scheme='category10')),
+            tooltip=['Keyword', 'Volume', 'KD %', 'CPC', 'Intent']
+        ).properties(height=400, title="Keyword Landscape").interactive()
+        
         st.altair_chart(scatter, use_container_width=True)
         
         # Tablo
@@ -235,10 +263,10 @@ if app_mode == "🔍 Keyword Research (Pro)":
                 "KD %": st.column_config.ProgressColumn("Zorluk", min_value=0, max_value=100, format="%d%%"),
                 "CPC": st.column_config.NumberColumn("CPC ($)", format="$%.2f"),
             },
-            height=350
+            height=400
         )
         
-        # --- YENİ AI STRATEJİ ALANI (KISA VE ÖZ) ---
+        # --- AI STRATEJİ ALANI ---
         st.divider()
         st.subheader("💡 AI Content Strategy")
         
@@ -246,10 +274,8 @@ if app_mode == "🔍 Keyword Research (Pro)":
             competitors_list = ", ".join([c for c in [comp1, comp2, comp3] if c])
             if not competitors_list: competitors_list = "Belirtilmedi"
 
-            # En yüksek hacimli 20 kelimeyi gönderiyoruz
-            top_keywords = df.head(20)[['Keyword', 'Volume', 'KD %']].to_csv(index=False)
+            top_keywords = df.head(25)[['Keyword', 'Volume', 'KD %']].to_csv(index=False)
             
-            # --- PROMPT DEĞİŞİKLİĞİ BURADA YAPILDI ---
             prompt = f"""
             Sen Kıdemli bir SEO Stratejistisin. Yanıtın çok kısa, net ve listelenmiş olmalı.
             
@@ -268,14 +294,12 @@ if app_mode == "🔍 Keyword Research (Pro)":
             İSTENEN FORMAT:
             1. **[Önerilen H1 Başlığı]**
                👉 *Neden?*: [Hangi kelimeyi hedefliyor? Hangi rakip eksiğini kapatıyor? (Max 2 cümle)]
-            
-            2. **[Önerilen H1 Başlığı]**
-               👉 *Neden?*: [...]
             """
             
             with st.spinner("Strateji oluşturuluyor..."):
                 try:
                     response = model.generate_content(prompt)
+                    st.success("Strateji Hazır!")
                     st.markdown(response.text)
                 except Exception as e:
                     st.error(f"AI Hatası: {e}")
@@ -285,43 +309,90 @@ if app_mode == "🔍 Keyword Research (Pro)":
 # ======================================================
 elif app_mode == "🤖 GSC AI Chatbot":
     st.title("🤖 GSC AI Data Analyst")
-    gsc_property = st.text_input("GSC Mülk URL'si", placeholder="sc-domain:markam.com")
+    
+    # Input area
+    col_gsc1, col_gsc2 = st.columns([3, 1])
+    with col_gsc1:
+        gsc_property = st.text_input("GSC Mülk URL'si", placeholder="sc-domain:markam.com")
+    with col_gsc2:
+        if st.button("Sohbeti Temizle"):
+            st.session_state.messages = []
+            st.session_state.current_gsc_data_range = None
+            st.rerun()
     
     if "messages" not in st.session_state: st.session_state.messages = []
     if "current_gsc_data_range" not in st.session_state: st.session_state.current_gsc_data_range = None
     if "gsc_dataframe" not in st.session_state: st.session_state.gsc_dataframe = None
 
+    # Mesajları göster
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if prompt := st.chat_input("Soru sor..."):
+    # Chat Input
+    if prompt := st.chat_input("Verilerinle ilgili soru sor... (Örn: Geçen ay en çok tıklanan sayfalarım hangileri?)"):
         if not gsc_property:
-            st.error("GSC Mülk adresini girin.")
+            st.error("Lütfen önce GSC Mülk adresini girin.")
         else:
+            # Kullanıcı mesajını ekle
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
 
-            with st.spinner("Analiz..."):
+            with st.spinner("Veriler analiz ediliyor..."):
+                # Tarih aralığını belirle
                 start_date, end_date = extract_date_range_from_prompt(prompt)
-                current_range = f"{start_date}|{end_date}"
+                current_range_key = f"{gsc_property}|{start_date}|{end_date}"
                 
-                if st.session_state.current_gsc_data_range != current_range:
+                # Veri daha önce çekilmediyse veya tarih değiştiyse çek
+                if st.session_state.current_gsc_data_range != current_range_key:
                     df_gsc = get_gsc_raw_data(gsc_property, start_date, end_date)
+                    
                     if df_gsc is not None and not df_gsc.empty:
                         st.session_state.gsc_dataframe = df_gsc
-                        st.session_state.current_gsc_data_range = current_range
-                        st.session_state.messages.append({"role": "assistant", "content": f"📅 {start_date} - {end_date} yüklendi."})
+                        st.session_state.current_gsc_data_range = current_range_key
+                        system_msg = f"✅ **{start_date}** ile **{end_date}** arasındaki veriler yüklendi. Analize başlıyorum."
+                        st.session_state.messages.append({"role": "assistant", "content": system_msg})
+                        with st.chat_message("assistant"): st.markdown(system_msg)
                     else:
-                        st.error("Veri yok.")
+                        err_msg = "❌ Belirtilen tarih veya mülk için veri bulunamadı. Yetkileri kontrol edin."
+                        st.session_state.messages.append({"role": "assistant", "content": err_msg})
+                        with st.chat_message("assistant"): st.error(err_msg)
                         st.stop()
                 
+                # AI Analizi
                 if st.session_state.gsc_dataframe is not None:
                     df = st.session_state.gsc_dataframe
-                    ai_ctx = f"Dönem: {start_date}-{end_date}. Top Tık: {df['Clicks'].sum()}\nKelimeler:\n{df.nlargest(30, 'Clicks')[['Query', 'Clicks']].to_markdown()}"
+                    
+                    # Token limitini aşmamak için veriyi özetleyerek gönderiyoruz
+                    summary_stats = f"""
+                    Toplam Tıklama: {df['Clicks'].sum()}
+                    Toplam Gösterim: {df['Impressions'].sum()}
+                    Ortalama CTR: {df['CTR'].mean():.2f}%
+                    Ortalama Pozisyon: {df['Position'].mean():.1f}
+                    """
+                    
+                    top_queries = df.nlargest(40, 'Clicks')[['Query', 'Clicks', 'Impressions', 'Position']].to_markdown(index=False)
+                    top_pages = df.groupby('Page').sum(numeric_only=True).nlargest(20, 'Clicks')[['Clicks']].to_markdown()
+                    
+                    ai_ctx = f"""
+                    SENARYO: Sen uzman bir SEO Analistisin. Aşağıdaki GSC verisine göre kullanıcının sorusunu yanıtla.
+                    DÖNEM: {start_date} - {end_date}
+                    
+                    GENEL İSTATİSTİKLER:
+                    {summary_stats}
+                    
+                    EN ÇOK TIKLANAN KELİMELER:
+                    {top_queries}
+                    
+                    EN ÇOK TIKLANAN SAYFALAR (Özet):
+                    {top_pages}
+                    
+                    SORU: {prompt}
+                    """
+                    
                     try:
-                        res = model.generate_content(f"Uzman SEO Analisti gibi cevapla. Veri:\n{ai_ctx}\nSoru: {prompt}")
+                        res = model.generate_content(ai_ctx)
                         st.session_state.messages.append({"role": "assistant", "content": res.text})
                         with st.chat_message("assistant"): st.markdown(res.text)
-                    except Exception as e: st.error(f"Hata: {e}")
-
+                    except Exception as e:
+                        st.error(f"AI Yanıt Üretme Hatası: {e}")
