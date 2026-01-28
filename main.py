@@ -19,12 +19,25 @@ st.markdown("""
     .stChatInput {position: fixed; bottom: 3rem; z-index: 100;}
     .block-container {padding-bottom: 7rem;}
     h1 {color: #d32f2f;}
+    
+    /* Metric Kutusu Genel Ayarı */
     div[data-testid="stMetric"] {
-        background-color: #f8f9fa;
+        background-color: #ffffff; /* Tam beyaz arka plan */
         border-radius: 10px;
-        padding: 10px;
+        padding: 15px;
         border: 1px solid #e0e0e0;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    /* Metric Başlığı (Label) - Koyu Gri */
+    div[data-testid="stMetric"] label {
+        color: #31333F !important; 
+    }
+
+    /* Metric Değeri (Value) - Kırmızı ve Kalın */
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: #d32f2f !important;
+        font-weight: 700 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -437,3 +450,4 @@ elif app_mode == "🤖 GSC AI Chatbot":
                     if res:
                         st.session_state.messages.append({"role": "assistant", "content": res.text})
                         with st.chat_message("assistant"): st.markdown(res.text)
+
