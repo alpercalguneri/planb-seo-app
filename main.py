@@ -240,7 +240,7 @@ if app_mode == "🔍 Keyword Research (Pro)":
         
         # --- YENİ AI STRATEJİ ALANI (KISA VE ÖZ) ---
         st.divider()
-        st.subheader("💡 5 'Killer' İçerik Fikri")
+        st.subheader("💡 AI Content Strategy")
         
         if st.button("🚀 Fikirleri Getir"):
             competitors_list = ", ".join([c for c in [comp1, comp2, comp3] if c])
@@ -324,3 +324,4 @@ elif app_mode == "🤖 GSC AI Chatbot":
                         st.session_state.messages.append({"role": "assistant", "content": res.text})
                         with st.chat_message("assistant"): st.markdown(res.text)
                     except Exception as e: st.error(f"Hata: {e}")
+
