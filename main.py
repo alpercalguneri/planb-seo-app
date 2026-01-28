@@ -7,6 +7,23 @@ from googleapiclient.discovery import build
 import datetime
 import altair as alt
 
+# --- DEBUG BAŞLANGIÇ ---
+import sys
+try:
+    st.error(f"🔍 AKTİF KÜTÜPHANE SÜRÜMÜ: {genai.__version__}")
+    st.write("--- KULLANILABİLİR MODELLER ---")
+    
+    # Senin anahtarınla erişilebilen modelleri listele
+    available_models = []
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            available_models.append(m.name)
+            st.code(m.name) # Ekrana bas
+            
+    st.write("-------------------------------")
+except Exception as e:
+    st.error(f"Debug Hatası: {e}")
+# --- DEBUG BİTİŞ ---
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Media SEO AI", layout="wide", page_icon="🅱️")
 
@@ -396,4 +413,5 @@ elif app_mode == "🤖 GSC AI Chatbot":
                         with st.chat_message("assistant"): st.markdown(res.text)
                     except Exception as e:
                         st.error(f"AI Yanıt Üretme Hatası: {e}")
+
 
