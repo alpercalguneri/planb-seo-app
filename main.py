@@ -325,4 +325,55 @@ elif app_mode == "🤖 GSC AI Chatbot":
                 current_range = f"{start_date}|{end_date}"
                 
                 # Veri yeni mi çekilmeli?
-                if st.
+                if st.session_state.current_gsc_data_range != current_range:
+                    df_gsc = get_gsc_raw_data(gsc_property, start_date, end_date)
+                    
+                    if df_gsc is not None and not df_gsc.empty:
+                        st.session_state.gsc_dataframe = df_gsc
+                        st.session_state.current_gsc_data_range = current_range
+                        system_msg = f"📅 **{start_date}** - **{end_date}** verisi yüklendi ({len(df_gsc)} satır)."
+                        st.session_state.messages.append({"role": "assistant", "content": system_msg})
+                        st.markdown(f"*{system_msg}*")
+                    else:
+                        err_msg = "Veri bulunamadı veya API hatası."
+                        st.session_state.messages.append({"role": "assistant", "content": err_msg})
+                        st.markdown(err_msg)
+                        st.stop()
+                
+                # AI Yanıtı
+                if st.session_state.gsc_dataframe is not None:
+                    df = st.session_state.gsc_dataframe
+                    
+                    # Veriyi küçültüp AI'ya özet geçiyoruz
+                    total_clicks = df['Clicks'].sum()
+                    top_queries = df.nlargest(30, 'Clicks')[['Query', 'Clicks', 'Position']].to_markdown()
+                    top_pages = df.groupby('Page')['Clicks'].sum().nlargest(10).to_markdown()
+                    
+                    ai_context = f"""
+                    DÖNEM: {start_date} ile {end_date} arası.
+                    TOPLAM TIKLAMA: {total_clicks}
+                    
+                    EN İYİ SORGULAR:
+                    {top_queries}
+                    
+                    EN İYİ SAYFALAR:
+                    {top_pages}
+                    """
+                    
+                    full_prompt = f"""
+                    Sen SEO Analistisin. Veri seti:
+                    {ai_context}
+                    
+                    Soru: "{prompt}"
+                    
+                    Yanıtında mutlaka sayısal verileri kullan. Kısa ve net ol.
+                    """
+                    
+                    try:
+                        response = model.generate_content(full_prompt)
+                        ai_reply = response.text
+                        st.session_state.messages.append({"role": "assistant", "content": ai_reply})
+                        with st.chat_message("assistant"):
+                            st.markdown(ai_reply)
+                    except Exception as e:
+                        st.error(f"AI Hatası: {e}")
