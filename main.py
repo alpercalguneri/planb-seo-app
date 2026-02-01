@@ -17,7 +17,7 @@ st.set_page_config(page_title="PlanB Media SEO AI", layout="wide", page_icon="�
 st.markdown("""
     <style>
     .main > div {padding-top: 2rem;}
-    .block-container {padding-bottom: 9rem;} /* Chat input için alt boşluk artırıldı */
+    .block-container {padding-bottom: 9rem;}
     h1 {color: #d32f2f;}
     
     /* Metric Kutuları */
@@ -35,27 +35,22 @@ st.markdown("""
     }
 
     /* --- CHAT INPUT UX İYİLEŞTİRMESİ --- */
-    /* Chat kutusunu sabitle ve güzelleştir */
     .stChatInput {
         position: fixed;
         bottom: 2rem;
         z-index: 1000;
         width: 100%;
     }
-    
-    /* Yazı yazılan alanın tasarımı */
     .stChatInput textarea {
         background-color: #ffffff !important;
         color: #333333 !important;
         border: 2px solid #e0e0e0 !important;
-        border-radius: 25px !important; /* Yuvarlak hatlar */
-        padding: 15px 20px !important; /* İç boşluğu artır */
-        font-size: 16px !important; /* Yazı boyutu */
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1) !important; /* Gölge efekti */
-        min-height: 60px !important; /* Daha yüksek/geniş alan */
+        border-radius: 25px !important;
+        padding: 15px 20px !important;
+        font-size: 16px !important;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1) !important;
+        min-height: 60px !important;
     }
-    
-    /* Focus olunca kenarlık rengi */
     .stChatInput textarea:focus {
         border-color: #d32f2f !important;
         box-shadow: 0 4px 20px rgba(211, 47, 47, 0.2) !important;
@@ -95,7 +90,7 @@ except Exception as e:
 
 # AI Model
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash') # En stabil model
+model = genai.GenerativeModel('gemini-1.5-flash') 
 
 # --- YARDIMCI FONKSİYONLAR ---
 
@@ -226,7 +221,7 @@ with st.sidebar:
     app_mode = st.radio("Mod Seçimi", ["🔍 Keyword Research (Pro)", "🤖 GSC AI Chatbot"])
     st.markdown("---")
     st.info("💡 **İpucu:** GSC Modu artık sadece raporlamıyor, strateji de üretiyor.")
-    st.caption("In-House Tool v2.7 (UX Update)")
+    st.caption("In-House Tool v2.8 (Active Link Update)")
 
 # ======================================================
 # MOD 1: KEYWORD RESEARCH (PRO)
@@ -310,44 +305,56 @@ if app_mode == "🔍 Keyword Research (Pro)":
                 if res: st.markdown(res.text)
 
 # ======================================================
-# MOD 2: GSC AI CHATBOT (BRAND BUTTONS & UX)
+# MOD 2: GSC AI CHATBOT
 # ======================================================
 elif app_mode == "🤖 GSC AI Chatbot":
     st.title("🤖 GSC AI Data Analyst")
 
-    # Mülk URL'sini Session State'te tutalım ki butonlar güncelleyebilsin
+    # Mülk URL'sini tutacak Session State (Varsayılan boş)
     if "gsc_property_input" not in st.session_state:
         st.session_state.gsc_property_input = ""
 
     # --- MARKA SEÇİM BUTONLARI ---
-    st.caption("Hızlı Marka Seçimi:")
+    st.caption("Hızlı Marka Seçimi (Değiştirmek için tıklayın):")
     b_col1, b_col2, b_col3 = st.columns([1, 1, 2])
     
+    # 1. BUTON: Brooks Brothers
     with b_col1:
         if st.button("👔 Brooks Brothers"):
-            # Not: GSC'de URL-Prefix ise tam adres, Domain ise 'sc-domain:' ile başlamalı.
-            # Aşağıdaki URL'yi kendi GSC kaydına göre gerekirse güncelle.
+            # 1. URL'yi güncelle
             st.session_state.gsc_property_input = "https://www.brooksbrothers.com.tr/"
+            # 2. Önceki verileri ve sohbeti temizle (Bağlam karışmasın)
+            st.session_state.messages = []
+            st.session_state.gsc_dataframe = None
+            st.session_state.active_date_range = None
+            # 3. Sayfayı yenile ki Input kutusu dolsun
+            st.rerun()
             
+    # 2. BUTON: Mellow Rush
     with b_col2:
         if st.button("🌿 Mellow Rush"):
             st.session_state.gsc_property_input = "https://mellowrush.me/"
+            st.session_state.messages = []
+            st.session_state.gsc_dataframe = None
+            st.session_state.active_date_range = None
+            st.rerun()
             
+    # TEMİZLE BUTONU
     with b_col3:
         if st.button("🗑️ Sohbeti Temizle", type="secondary"):
             st.session_state.messages = []
             st.session_state.active_date_range = None
             st.rerun()
 
-    # Input alanı (Butonlara basınca burası otomatik dolacak)
+    # Input alanı (Value'su Session State'e bağlı)
     gsc_property = st.text_input(
-        "GSC Mülk URL'si (veya yukarıdan seç)", 
+        "GSC Mülk URL'si (Seçim yukarıda yapıldı)", 
         value=st.session_state.gsc_property_input,
-        placeholder="sc-domain:markam.com veya https://markam.com",
+        placeholder="Bir marka seçin veya URL girin...",
         key="gsc_input_field"
     )
     
-    # Session değerini input ile senkronize et (Manuel değişikliğe izin ver)
+    # Session değerini manuel girişle de senkronize et
     st.session_state.gsc_property_input = gsc_property
 
     # --- CHAT STATE ---
@@ -363,15 +370,15 @@ elif app_mode == "🤖 GSC AI Chatbot":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # --- CHAT INPUT (CSS İLE GÜZELLEŞTİRİLDİ) ---
-    if prompt := st.chat_input("Bir soru sor... (Örn: Geçen hafta durum ne?)"):
+    # --- CHAT INPUT ---
+    if prompt := st.chat_input("Bir soru sor... (Örn: Geçen hafta trafik nasıldı?)"):
         if not gsc_property:
-            st.error("Lütfen önce bir marka seçin veya GSC adresi girin.")
+            st.error("⚠️ Lütfen önce yukarıdaki butonlardan bir marka seçin!")
         else:
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
 
-            with st.spinner("Analiz ediliyor..."):
+            with st.spinner("Veriler analiz ediliyor..."):
                 # Tarih ve Veri Çekme
                 new_dates = extract_date_range_from_prompt(prompt)
                 if new_dates:
@@ -394,7 +401,7 @@ elif app_mode == "🤖 GSC AI Chatbot":
                              st.session_state.messages.append({"role": "assistant", "content": date_info_msg})
                              with st.chat_message("assistant"): st.info(date_info_msg)
                     else:
-                        st.error("Veri bulunamadı. GSC yetkilerini veya URL formatını kontrol edin.")
+                        st.error("Veri bulunamadı. Lütfen URL formatını veya GSC yetkilerini kontrol edin.")
                         st.stop()
 
                 # Stratejik AI Yanıtı
@@ -411,22 +418,28 @@ elif app_mode == "🤖 GSC AI Chatbot":
 
                     ai_prompt = f"""
                     Sen Kıdemli bir SEO Stratejistisin.
-                    Veriyi oku ve eyleme dökülebilir stratejiler üret.
                     
-                    📊 VERİ ÖZETİ:
+                    BAĞLAM:
+                    - Marka URL: {gsc_property}
+                    
+                    GÖREV:
+                    Aşağıdaki verileri ve sohbet geçmişini kullanarak soruları yanıtla.
+                    Sadece raporlama yapma, "neden" olduğunu ve "nasıl" çözüleceğini anlat.
+                    
+                    📊 ÖZET:
                     {summary_stats}
-                    📈 EN İYİ KELİMELER:
+                    📈 KAZANANLAR:
                     {top_queries}
-                    📉 DÜŞÜK PERFORMANS:
+                    📉 KAYBEDENLER (Fırsatlar):
                     {losers}
                     💬 SOHBET GEÇMİŞİ:
                     {chat_history_text}
                     SORU: {prompt}
                     
                     CEVAP FORMATI:
-                    1. **Analiz:** (Veri ne diyor?)
-                    2. **İçgörü:** (Sorunun/Başarının kök nedeni ne?)
-                    3. **Aksiyon:** (Hemen ne yapmalıyız?)
+                    1. **Analiz:** Veri ne diyor?
+                    2. **İçgörü:** Neden böyle olmuş olabilir?
+                    3. **Stratejik Öneri:** Ne yapmalıyız?
                     """
                     
                     res = generate_safe(ai_prompt) 
