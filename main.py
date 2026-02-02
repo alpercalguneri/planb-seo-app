@@ -69,7 +69,7 @@ except Exception as e:
 
 # AI Model
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-flash-latest')
 
 # --- YARDIMCI FONKSİYONLAR ---
 
@@ -412,4 +412,5 @@ elif app_mode == "🤖 GSC AI Chatbot":
                     if res:
                         st.session_state.messages.append({"role": "assistant", "content": res.text})
                         with st.chat_message("assistant"): st.markdown(res.text)
+
 
