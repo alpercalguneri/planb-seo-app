@@ -199,8 +199,8 @@ with st.sidebar:
     st.markdown("---")
     app_mode = st.radio("Mod Seçimi", ["🔍 Keyword Research (Pro)", "🤖 GSC AI Chatbot"])
     st.markdown("---")
-    st.info("💡 **İpucu:** Chatbot artık sorunun tipine göre (kısa/uzun) cevap veriyor.")
-    st.caption("In-House Tool v3.0 (Adaptive AI)")
+    st.info("💡 **İpucu:** GSC, Genel Sorular ve Strateji. Hepsi bir arada.")
+    st.caption("In-House Tool v3.1 (Hybrid Mode)")
 
 # ======================================================
 # MOD 1: KEYWORD RESEARCH (PRO)
@@ -284,7 +284,7 @@ if app_mode == "🔍 Keyword Research (Pro)":
                 if res: st.markdown(res.text)
 
 # ======================================================
-# MOD 2: GSC AI CHATBOT (ADAPTIVE RESPONSE UPDATE)
+# MOD 2: GSC AI CHATBOT (HYBRID MODE UPDATE)
 # ======================================================
 elif app_mode == "🤖 GSC AI Chatbot":
     st.title("🤖 GSC AI Data Analyst")
@@ -335,14 +335,14 @@ elif app_mode == "🤖 GSC AI Chatbot":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if prompt := st.chat_input("Soru sor... (Örn: 'Trafik kaç?' veya 'Neden düştük analiz et')"):
+    if prompt := st.chat_input("Soru sor... (GSC Verisi veya Genel Konular)"):
         if not gsc_property:
             st.error("Lütfen önce marka seçin.")
         else:
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
 
-            with st.spinner("Analiz ediliyor..."):
+            with st.spinner("Düşünüyor..."):
                 new_dates = extract_date_range_from_prompt(prompt)
                 if new_dates:
                     start_date, end_date = new_dates
@@ -378,30 +378,32 @@ elif app_mode == "🤖 GSC AI Chatbot":
                         role_name = "Kullanıcı" if m['role'] == 'user' else "AI"
                         chat_history_text += f"{role_name}: {m['content']}\n"
 
-                    # --- ADAPTIVE SYSTEM PROMPT ---
+                    # --- HYBRID SYSTEM PROMPT ---
                     ai_prompt = f"""
-                    Sen Kıdemli bir SEO Stratejistisin.
+                    Sen gelişmiş bir Yapay Zeka Asistanısın. Şu anda bir SEO analiz aracının içindesin.
                     
-                    GÖREVİN: Kullanıcının sorusunun TİPİNE ve NİYETİNE (Intent) göre cevabını şekillendir.
-                    
-                    1. DURUM: BASİT VERİ SORUSU
-                    Eğer kullanıcı "Kaç tıklama aldık?", "En iyi kelime ne?", "Geçen haftanın verisi ne?" gibi sadece rakam veya olgu soruyorsa:
-                    - Sadece cevabı ver.
-                    - Uzun uzun açıklama yapma.
-                    - Rapor formatına girme.
-                    - Örn: "Toplam tıklama sayısı 5,430." (Bitti).
-                    
-                    2. DURUM: ANALİZ ve YORUM SORUSU
-                    Eğer kullanıcı "Neden düştük?", "Durumu analiz et", "Ne yapmalıyız?" gibi yorum istiyorsa:
-                    - O zaman detaylı "Analiz, İçgörü, Aksiyon" formatını kullan.
-                    
-                    📊 VERİ ÖZETİ:
+                    ELİNDEKİ VERİ SETİ (GSC):
                     {summary_stats}
-                    📈 EN İYİ KELİMELER:
+                    EN İYİ KELİMELER:
                     {top_queries}
-                    📉 DÜŞÜK PERFORMANS:
+                    DÜŞÜK PERFORMANSLILAR:
                     {losers}
-                    💬 SOHBET GEÇMİŞİ:
+                    
+                    GÖREVİN: Kullanıcının sorusuna göre MODUNU SEÇ:
+                    
+                    MOD 1: VERİ ODAKLI SORU (GSC, SEO, Trafik)
+                    Eğer soru yukarıdaki veri setiyle ilgiliyse:
+                    - Bir SEO Stratejisti gibi davran.
+                    - Eğer soru basitse (Örn: "Kaç tıklama?") -> Kısa cevap ver.
+                    - Eğer soru analiz istiyorsa (Örn: "Neden düştük?") -> Analiz, İçgörü, Aksiyon formatını kullan.
+                    
+                    MOD 2: GENEL SORU (Kodlama, Genel Kültür, Metin Yazarlığı)
+                    Eğer soru elindeki verilerle alakasızsa (Örn: "Python nedir?", "Bana şiir yaz", "Canonical nedir?"):
+                    - Veri setini görmezden gel.
+                    - Standart bir Gemini asistanı gibi, kendi genel bilginle cevap ver.
+                    - ASLA "Veri setimde bu bilgi yok" diyerek reddetme.
+                    
+                    SOHBET GEÇMİŞİ:
                     {chat_history_text}
                     SORU: {prompt}
                     """
