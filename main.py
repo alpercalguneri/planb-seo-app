@@ -21,7 +21,7 @@ st.markdown("""
     .block-container {padding-bottom: 7rem;}
     h1 {color: #d32f2f;}
     
-    /* Metric Kutusu Genel Ayarı */
+    /* Metric Kutusu */
     div[data-testid="stMetric"] {
         background-color: #ffffff;
         border-radius: 10px;
@@ -29,15 +29,13 @@ st.markdown("""
         border: 1px solid #e0e0e0;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    div[data-testid="stMetric"] label {
-        color: #31333F !important; 
-    }
+    div[data-testid="stMetric"] label { color: #31333F !important; }
     div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
         color: #d32f2f !important;
         font-weight: 700 !important;
     }
     
-    /* Marka Butonları */
+    /* Butonlar */
     div.stButton > button {
         width: 100%;
         border-radius: 8px;
@@ -69,9 +67,8 @@ except Exception as e:
     st.error(f"🚨 Secret Hatası: {e}. Lütfen .streamlit/secrets.toml dosyasını kontrol edin.")
     st.stop()
 
-# AI Model Konfigürasyonu
+# AI Model
 genai.configure(api_key=GOOGLE_API_KEY)
-# İstediğin güncel model:
 model = genai.GenerativeModel('gemini-flash-latest')
 
 # --- YARDIMCI FONKSİYONLAR ---
@@ -179,25 +176,13 @@ def get_dfs_data(keyword, loc, lang):
         return None
 
 def semantic_filter_keywords(df, target_site, competitors):
-    """Semantic Filtreleme Fonksiyonu"""
     keywords_list = df['Keyword'].head(50).tolist()
     prompt = f"""
     Sen uzman bir SEO editörüsün. Aşağıdaki kelime listesini temizlemen gerekiyor.
-    
-    BAĞLAM:
-    - Hedef Site: {target_site}
-    - Rakipler: {competitors}
-    
-    GÖREV:
-    Bu hedef sitenin ve rakiplerin faaliyet alanını tahmin et.
-    Ardından, aşağıdaki listeden BU ALANLA ALAKASIZ olan kelimeleri çıkar.
-    Sadece alakalı olan kelimeleri JSON formatında liste olarak döndür.
-    
-    LİSTE:
-    {keywords_list}
-    
-    ÇIKTI (Sadece JSON listesi):
-    ["kelime1", "kelime2"]
+    BAĞLAM: Hedef Site: {target_site}, Rakipler: {competitors}
+    GÖREV: Bu alanla ALAKASIZ olan kelimeleri çıkar. Sadece alakalı olanları JSON listesi olarak döndür.
+    LİSTE: {keywords_list}
+    ÇIKTI: ["kelime1", "kelime2"]
     """
     try:
         res = generate_safe(prompt)
@@ -214,8 +199,8 @@ with st.sidebar:
     st.markdown("---")
     app_mode = st.radio("Mod Seçimi", ["🔍 Keyword Research (Pro)", "🤖 GSC AI Chatbot"])
     st.markdown("---")
-    st.info("💡 **İpucu:** GSC Modu sadece raporlamıyor, strateji de üretiyor.")
-    st.caption("In-House Tool v2.9 (Stable & Brands)")
+    st.info("💡 **İpucu:** Chatbot artık sorunun tipine göre (kısa/uzun) cevap veriyor.")
+    st.caption("In-House Tool v3.0 (Adaptive AI)")
 
 # ======================================================
 # MOD 1: KEYWORD RESEARCH (PRO)
@@ -226,7 +211,6 @@ if app_mode == "🔍 Keyword Research (Pro)":
     if "df_search_results" not in st.session_state: st.session_state.df_search_results = None
     if "analyzed_keyword" not in st.session_state: st.session_state.analyzed_keyword = ""
 
-    # Üst Filtre Alanı
     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
     with col1:
         keyword_input = st.text_input("Anahtar Kelime", placeholder="Örn: elektrikli süpürge")
@@ -239,33 +223,26 @@ if app_mode == "🔍 Keyword Research (Pro)":
     with col4:
         match_type = st.selectbox("Eşleme", ["Geniş", "Tam (Phrase)"])
     
-    with st.expander("⚔️ Semantic Bağlam Ayarları (Zorunlu)", expanded=True):
+    with st.expander("⚔️ Semantic Bağlam Ayarları", expanded=True):
         st.info("AI'nın doğru kelimeleri önermesi için hedef ve rakipleri girin.")
         target_website = st.text_input("Hedef Web Sitesi", placeholder="https://markam.com")
         rc1, rc2 = st.columns(2)
         comp1 = rc1.text_input("Rakip 1", placeholder="rakip1.com")
         comp2 = rc2.text_input("Rakip 2", placeholder="rakip2.com")
     
-    # --- ANALİZ BUTONU ---
     if st.button("Analizi Başlat", type="primary"):
         if keyword_input and target_website:
             with st.spinner(f"'{keyword_input}' taranıyor ve anlamsal olarak filtreleniyor..."):
                 lang_code = lang_map[selected_lang]
                 loc_code = loc_map[country]
-                
-                # 1. Ham veriyi çek
                 raw_df = get_dfs_data(keyword_input, loc_code, lang_code)
                 
                 if raw_df is not None and not raw_df.empty:
-                    # 2. Tam eşleme filtresi
                     if match_type == "Tam (Phrase)":
                         raw_df = raw_df[raw_df['Keyword'].str.contains(keyword_input.lower())]
                     
-                    # 3. AI SEMANTIC FILTERING
                     competitors = ", ".join([c for c in [comp1, comp2] if c])
                     filtered_df = semantic_filter_keywords(raw_df, target_website, competitors)
-                    
-                    # Sıralama ve Kayıt
                     filtered_df = filtered_df.sort_values(by="Volume", ascending=False).reset_index(drop=True)
                     st.session_state.df_search_results = filtered_df
                     st.session_state.analyzed_keyword = keyword_input
@@ -273,12 +250,10 @@ if app_mode == "🔍 Keyword Research (Pro)":
                 else:
                     st.error("Veri bulunamadı veya API hatası.")
         else:
-            st.warning("Lütfen Anahtar Kelime ve Hedef Site alanlarını doldurun.")
+            st.warning("Lütfen zorunlu alanları doldurun.")
 
-    # --- SONUÇLAR ---
     if st.session_state.df_search_results is not None and not st.session_state.df_search_results.empty:
         df = st.session_state.df_search_results
-        
         st.divider()
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Alakalı Kelime", len(df))
@@ -286,7 +261,6 @@ if app_mode == "🔍 Keyword Research (Pro)":
         m3.metric("Ort. KD %", round(df['KD %'].mean(), 1))
         m4.metric("Tahmini Trafik", f"{(df['Volume'].sum() * 0.3):,.0f}")
         
-        # Grafik
         chart_data = df.head(100)
         scatter = alt.Chart(chart_data).mark_circle().encode(
             x=alt.X('KD %', title='Keyword Difficulty'),
@@ -297,74 +271,43 @@ if app_mode == "🔍 Keyword Research (Pro)":
         ).properties(height=400, title="Semantic Keyword Landscape").interactive()
         st.altair_chart(scatter, use_container_width=True)
         
-        # Tablo
-        st.dataframe(
-            df[['Keyword', 'Intent', 'Volume', 'KD %', 'CPC', 'Competition']],
-            use_container_width=True,
-            column_config={
-                "Volume": st.column_config.NumberColumn("Hacim", format="%d"),
-                "KD %": st.column_config.ProgressColumn("Zorluk", min_value=0, max_value=100, format="%d%%"),
-                "CPC": st.column_config.NumberColumn("CPC ($)", format="$%.2f"),
-            },
-            height=400
-        )
+        st.dataframe(df[['Keyword', 'Intent', 'Volume', 'KD %', 'CPC', 'Competition']], use_container_width=True, height=400)
         
-        # --- AI STRATEJİ ALANI ---
         st.divider()
         st.subheader("💡 AI Content Strategy")
         if st.button("🚀 Strateji Oluştur"):
             comps = ", ".join([c for c in [comp1, comp2] if c])
             top_kw = df.head(20)[['Keyword', 'Volume', 'KD %']].to_csv(index=False)
-            
-            prompt = f"""
-            Sen Kıdemli bir SEO Stratejistisin.
-            BAĞLAM:
-            - Site: {target_website}
-            - Rakipler: {comps}
-            - Hedef Kelimeler: {top_kw}
-            
-            GÖREV:
-            Bu sitenin rakiplerini geçmesi için 3 adet "Content Cluster" (İçerik Kümesi) öner.
-            Her küme için bir ana başlık ve altına 2 alt makale fikri ver.
-            
-            ÇIKTI FORMATI:
-            ### 1. [Küme Adı]
-            - **Ana Makale:** [Başlık] (Neden: ...)
-            - **Destekleyici:** [Başlık]
-            - **Destekleyici:** [Başlık]
-            """
+            prompt = f"Sen Kıdemli bir SEO Stratejistisin. Site: {target_website}, Rakipler: {comps}, Kelimeler: {top_kw}. Görev: 3 adet 'Content Cluster' öner."
             with st.spinner("Strateji kurgulanıyor..."):
                 res = generate_safe(prompt)
                 if res: st.markdown(res.text)
 
 # ======================================================
-# MOD 2: GSC AI CHATBOT
+# MOD 2: GSC AI CHATBOT (ADAPTIVE RESPONSE UPDATE)
 # ======================================================
 elif app_mode == "🤖 GSC AI Chatbot":
     st.title("🤖 GSC AI Data Analyst")
-    
-    # URL'yi tutacak state
+
     if "target_gsc_url" not in st.session_state:
         st.session_state.target_gsc_url = ""
 
     st.caption("Marka Seçimi:")
     b_col1, b_col2, b_col3 = st.columns([1, 1, 2])
     
-    # 1. Brooks Brothers Butonu
     with b_col1:
         if st.button("👔 Brooks Brothers"):
             st.session_state.target_gsc_url = "https://www.brooksbrothers.com.tr/"
-            st.session_state.messages = [] # Sohbeti temizle
+            st.session_state.messages = []
             st.session_state.gsc_dataframe = None
-            st.rerun() # Sayfayı yenile ki input dolsun
+            st.rerun()
 
-    # 2. Mellow Rush Butonu
     with b_col2:
         if st.button("🌿 Mellow Rush"):
             st.session_state.target_gsc_url = "sc-domain:mellowrush.me"
-            st.session_state.messages = [] # Sohbeti temizle
+            st.session_state.messages = []
             st.session_state.gsc_dataframe = None
-            st.rerun() # Sayfayı yenile ki input dolsun
+            st.rerun()
 
     with b_col3:
         if st.button("🗑️ Temizle", type="secondary"):
@@ -372,14 +315,12 @@ elif app_mode == "🤖 GSC AI Chatbot":
             st.session_state.target_gsc_url = ""
             st.rerun()
 
-    # Input alanı state'e bağlı (value=...)
     gsc_property = st.text_input(
         "GSC Mülk URL'si", 
         value=st.session_state.target_gsc_url,
         placeholder="sc-domain:markam.com veya https://markam.com"
     )
     
-    # Manuel değişiklikleri de yakala
     if gsc_property != st.session_state.target_gsc_url:
         st.session_state.target_gsc_url = gsc_property
 
@@ -394,9 +335,9 @@ elif app_mode == "🤖 GSC AI Chatbot":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if prompt := st.chat_input("Verilerinle ilgili soru sor veya strateji iste..."):
+    if prompt := st.chat_input("Soru sor... (Örn: 'Trafik kaç?' veya 'Neden düştük analiz et')"):
         if not gsc_property:
-            st.error("Lütfen önce GSC Mülk adresini girin veya marka seçin.")
+            st.error("Lütfen önce marka seçin.")
         else:
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
@@ -437,23 +378,32 @@ elif app_mode == "🤖 GSC AI Chatbot":
                         role_name = "Kullanıcı" if m['role'] == 'user' else "AI"
                         chat_history_text += f"{role_name}: {m['content']}\n"
 
+                    # --- ADAPTIVE SYSTEM PROMPT ---
                     ai_prompt = f"""
-                    Sen sadece veri okuyan bir bot değil, Kıdemli bir SEO Stratejistisin.
+                    Sen Kıdemli bir SEO Stratejistisin.
+                    
+                    GÖREVİN: Kullanıcının sorusunun TİPİNE ve NİYETİNE (Intent) göre cevabını şekillendir.
+                    
+                    1. DURUM: BASİT VERİ SORUSU
+                    Eğer kullanıcı "Kaç tıklama aldık?", "En iyi kelime ne?", "Geçen haftanın verisi ne?" gibi sadece rakam veya olgu soruyorsa:
+                    - Sadece cevabı ver.
+                    - Uzun uzun açıklama yapma.
+                    - Rapor formatına girme.
+                    - Örn: "Toplam tıklama sayısı 5,430." (Bitti).
+                    
+                    2. DURUM: ANALİZ ve YORUM SORUSU
+                    Eğer kullanıcı "Neden düştük?", "Durumu analiz et", "Ne yapmalıyız?" gibi yorum istiyorsa:
+                    - O zaman detaylı "Analiz, İçgörü, Aksiyon" formatını kullan.
                     
                     📊 VERİ ÖZETİ:
                     {summary_stats}
                     📈 EN İYİ KELİMELER:
                     {top_queries}
-                    📉 DÜŞÜK PERFORMANS (Fırsat):
+                    📉 DÜŞÜK PERFORMANS:
                     {losers}
                     💬 SOHBET GEÇMİŞİ:
                     {chat_history_text}
                     SORU: {prompt}
-                    
-                    CEVAP FORMATI:
-                    1. **Analiz:** (Veri ne diyor?)
-                    2. **İçgörü:** (Neden böyle olmuş olabilir?)
-                    3. **Aksiyon Planı:** (Kullanıcı hemen ne yapmalı?)
                     """
                     
                     res = generate_safe(ai_prompt) 
