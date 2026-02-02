@@ -13,7 +13,7 @@ import json
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="PlanB Media SEO AI", layout="wide", page_icon="🅱️")
 
-# --- CSS VE TASARIM (Sadece Temel Okunabilirlik) ---
+# --- CSS VE TASARIM ---
 st.markdown("""
     <style>
     .main > div {padding-top: 2rem;}
@@ -21,7 +21,7 @@ st.markdown("""
     .block-container {padding-bottom: 7rem;}
     h1 {color: #d32f2f;}
     
-    /* Metric Kutusu Genel Ayarı (Okunabilirlik İçin) */
+    /* Metric Kutusu Genel Ayarı */
     div[data-testid="stMetric"] {
         background-color: #ffffff;
         border-radius: 10px;
@@ -35,6 +35,14 @@ st.markdown("""
     div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
         color: #d32f2f !important;
         font-weight: 700 !important;
+    }
+    
+    /* Marka Butonları */
+    div.stButton > button {
+        width: 100%;
+        border-radius: 8px;
+        height: 3em;
+        font-weight: 600;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -61,9 +69,10 @@ except Exception as e:
     st.error(f"🚨 Secret Hatası: {e}. Lütfen .streamlit/secrets.toml dosyasını kontrol edin.")
     st.stop()
 
-# AI Model (Ücretli Key için En İyisi)
+# AI Model Konfigürasyonu
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-flash-latest') 
+# İstediğin güncel model:
+model = genai.GenerativeModel('gemini-flash-latest')
 
 # --- YARDIMCI FONKSİYONLAR ---
 
@@ -206,10 +215,10 @@ with st.sidebar:
     app_mode = st.radio("Mod Seçimi", ["🔍 Keyword Research (Pro)", "🤖 GSC AI Chatbot"])
     st.markdown("---")
     st.info("💡 **İpucu:** GSC Modu sadece raporlamıyor, strateji de üretiyor.")
-    st.caption("In-House Tool v2.8 (Stable)")
+    st.caption("In-House Tool v2.9 (Stable & Brands)")
 
 # ======================================================
-# MOD 1: KEYWORD RESEARCH (PRO) - SEMANTIC UPDATE
+# MOD 1: KEYWORD RESEARCH (PRO)
 # ======================================================
 if app_mode == "🔍 Keyword Research (Pro)":
     st.title("🔍 Keyword Magic Tool")
@@ -329,20 +338,51 @@ if app_mode == "🔍 Keyword Research (Pro)":
                 if res: st.markdown(res.text)
 
 # ======================================================
-# MOD 2: GSC AI CHATBOT (STRATEJİK - MANUEL URL GİRİŞLİ)
+# MOD 2: GSC AI CHATBOT
 # ======================================================
 elif app_mode == "🤖 GSC AI Chatbot":
     st.title("🤖 GSC AI Data Analyst")
     
-    col_gsc1, col_gsc2 = st.columns([3, 1])
-    with col_gsc1:
-        gsc_property = st.text_input("GSC Mülk URL'si", placeholder="sc-domain:markam.com")
-    with col_gsc2:
-        if st.button("Sohbeti Temizle"):
-            st.session_state.messages = []
-            st.session_state.active_date_range = None
-            st.rerun()
+    # URL'yi tutacak state
+    if "target_gsc_url" not in st.session_state:
+        st.session_state.target_gsc_url = ""
+
+    st.caption("Marka Seçimi:")
+    b_col1, b_col2, b_col3 = st.columns([1, 1, 2])
     
+    # 1. Brooks Brothers Butonu
+    with b_col1:
+        if st.button("👔 Brooks Brothers"):
+            st.session_state.target_gsc_url = "https://www.brooksbrothers.com.tr/"
+            st.session_state.messages = [] # Sohbeti temizle
+            st.session_state.gsc_dataframe = None
+            st.rerun() # Sayfayı yenile ki input dolsun
+
+    # 2. Mellow Rush Butonu
+    with b_col2:
+        if st.button("🌿 Mellow Rush"):
+            st.session_state.target_gsc_url = "sc-domain:mellowrush.me"
+            st.session_state.messages = [] # Sohbeti temizle
+            st.session_state.gsc_dataframe = None
+            st.rerun() # Sayfayı yenile ki input dolsun
+
+    with b_col3:
+        if st.button("🗑️ Temizle", type="secondary"):
+            st.session_state.messages = []
+            st.session_state.target_gsc_url = ""
+            st.rerun()
+
+    # Input alanı state'e bağlı (value=...)
+    gsc_property = st.text_input(
+        "GSC Mülk URL'si", 
+        value=st.session_state.target_gsc_url,
+        placeholder="sc-domain:markam.com veya https://markam.com"
+    )
+    
+    # Manuel değişiklikleri de yakala
+    if gsc_property != st.session_state.target_gsc_url:
+        st.session_state.target_gsc_url = gsc_property
+
     if "messages" not in st.session_state: st.session_state.messages = []
     if "gsc_dataframe" not in st.session_state: st.session_state.gsc_dataframe = None
     if "active_date_range" not in st.session_state: 
@@ -356,13 +396,12 @@ elif app_mode == "🤖 GSC AI Chatbot":
 
     if prompt := st.chat_input("Verilerinle ilgili soru sor veya strateji iste..."):
         if not gsc_property:
-            st.error("Lütfen önce GSC Mülk adresini girin.")
+            st.error("Lütfen önce GSC Mülk adresini girin veya marka seçin.")
         else:
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
 
             with st.spinner("Analiz ediliyor..."):
-                # Tarih ve Veri Çekme
                 new_dates = extract_date_range_from_prompt(prompt)
                 if new_dates:
                     start_date, end_date = new_dates
@@ -387,11 +426,9 @@ elif app_mode == "🤖 GSC AI Chatbot":
                         st.error("Veri bulunamadı.")
                         st.stop()
 
-                # AI STRATEJİ BAĞLAMI
                 if st.session_state.gsc_dataframe is not None:
                     df = st.session_state.gsc_dataframe
                     summary_stats = f"Dönem: {start_date} - {end_date} | Toplam Tık: {df['Clicks'].sum()} | Ort. Poz: {df['Position'].mean():.1f}"
-                    # Veri setini zenginleştiriyoruz
                     top_queries = df.nlargest(60, 'Clicks')[['Query', 'Clicks', 'Impressions', 'Position']].to_markdown(index=False)
                     losers = df.sort_values(by='Position', ascending=False).head(10)[['Query', 'Position']].to_markdown(index=False)
                     
