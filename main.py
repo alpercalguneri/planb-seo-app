@@ -107,6 +107,10 @@ def extract_date_range_from_prompt(user_prompt):
     Bugünün tarihi: {today}
     Kullanıcı Girdisi: "{user_prompt}"
     GÖREV: Girdide YENİ bir tarih aralığı isteği var mı?
+    
+    ÖNEMLİ: "3 aylık plan yap", "gelecek sene" gibi ifadeler GEÇMİŞ veri isteği DEĞİLDİR. Bunlar için "NONE" dön.
+    Sadece "geçen ay", "son 2 hafta" gibi geçmişe dönük isteklerde tarih ver.
+    
     VARSA FORMATI: "YYYY-MM-DD|YYYY-MM-DD"
     YOKSA: "NONE"
     """
@@ -142,8 +146,9 @@ def get_gsc_raw_data(site_url, start_date, end_date):
             return pd.DataFrame(data)
         return pd.DataFrame()
     except Exception as e:
+        # Hata olsa bile None döndürme, boş dataframe döndür ki akış bozulmasın
         print(f"GSC Error: {e}")
-        return None
+        return pd.DataFrame()
 
 @st.cache_data(ttl=86400)
 def get_dfs_data(keyword, loc, lang):
@@ -199,8 +204,8 @@ with st.sidebar:
     st.markdown("---")
     app_mode = st.radio("Mod Seçimi", ["🔍 Keyword Research (Pro)", "🤖 GSC AI Chatbot"])
     st.markdown("---")
-    st.info("💡 **İpucu:** GSC, Genel Sorular ve Strateji. Hepsi bir arada.")
-    st.caption("In-House Tool v3.1 (Hybrid Mode)")
+    st.info("💡 **İpucu:** Veri olmasa bile strateji sorabilirsin.")
+    st.caption("In-House Tool v3.2 (Strategy Ready)")
 
 # ======================================================
 # MOD 1: KEYWORD RESEARCH (PRO)
@@ -284,7 +289,7 @@ if app_mode == "🔍 Keyword Research (Pro)":
                 if res: st.markdown(res.text)
 
 # ======================================================
-# MOD 2: GSC AI CHATBOT (HYBRID MODE UPDATE)
+# MOD 2: GSC AI CHATBOT (STRATEGY & FAIL-OPEN ENABLED)
 # ======================================================
 elif app_mode == "🤖 GSC AI Chatbot":
     st.title("🤖 GSC AI Data Analyst")
@@ -335,7 +340,7 @@ elif app_mode == "🤖 GSC AI Chatbot":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    if prompt := st.chat_input("Soru sor... (GSC Verisi veya Genel Konular)"):
+    if prompt := st.chat_input("Soru sor... (Örn: '3 aylık içerik planı yap' veya 'Geçen hafta nasıldı?')"):
         if not gsc_property:
             st.error("Lütfen önce marka seçin.")
         else:
@@ -343,74 +348,88 @@ elif app_mode == "🤖 GSC AI Chatbot":
             with st.chat_message("user"): st.markdown(prompt)
 
             with st.spinner("Düşünüyor..."):
+                # 1. Tarih var mı?
                 new_dates = extract_date_range_from_prompt(prompt)
+                
+                # Tarih değiştiyse veya yeni veri istendiyse
                 if new_dates:
                     start_date, end_date = new_dates
                     st.session_state.active_date_range = (start_date, end_date)
                     date_info_msg = f"📅 Analiz Dönemi: **{start_date} / {end_date}**"
                 else:
+                    # Yeni tarih yok, hafızadakini kullan
                     start_date, end_date = st.session_state.active_date_range
                     date_info_msg = None
 
                 current_key = f"{gsc_property}|{start_date}|{end_date}"
                 last_key = st.session_state.get("last_fetched_key", "")
 
+                # 2. Veri Çekme Denemesi (Hata verirse durmayacak)
+                # Sadece tarih değiştiyse veya daha önce çekilmediyse
                 if current_key != last_key or st.session_state.gsc_dataframe is None:
-                    df_gsc = get_gsc_raw_data(gsc_property, start_date, end_date)
-                    if df_gsc is not None and not df_gsc.empty:
-                        st.session_state.gsc_dataframe = df_gsc
-                        st.session_state.last_fetched_key = current_key
-                        if date_info_msg:
-                             st.session_state.messages.append({"role": "assistant", "content": date_info_msg})
-                             with st.chat_message("assistant"): st.info(date_info_msg)
-                    else:
-                        st.error("Veri bulunamadı.")
-                        st.stop()
+                    try:
+                        df_gsc = get_gsc_raw_data(gsc_property, start_date, end_date)
+                        if df_gsc is not None and not df_gsc.empty:
+                            st.session_state.gsc_dataframe = df_gsc
+                            st.session_state.last_fetched_key = current_key
+                            if date_info_msg:
+                                st.session_state.messages.append({"role": "assistant", "content": date_info_msg})
+                                with st.chat_message("assistant"): st.info(date_info_msg)
+                        else:
+                            # Veri boş döndü ama akışı bozma, strateji moduna geç
+                            pass 
+                    except Exception:
+                        pass # API hatası olsa bile devam et
 
-                if st.session_state.gsc_dataframe is not None:
+                # 3. Bağlam Hazırlığı (Veri Var mı, Yok mu?)
+                if st.session_state.gsc_dataframe is not None and not st.session_state.gsc_dataframe.empty:
                     df = st.session_state.gsc_dataframe
                     summary_stats = f"Dönem: {start_date} - {end_date} | Toplam Tık: {df['Clicks'].sum()} | Ort. Poz: {df['Position'].mean():.1f}"
                     top_queries = df.nlargest(60, 'Clicks')[['Query', 'Clicks', 'Impressions', 'Position']].to_markdown(index=False)
                     losers = df.sort_values(by='Position', ascending=False).head(10)[['Query', 'Position']].to_markdown(index=False)
-                    
-                    chat_history_text = ""
-                    for m in st.session_state.messages[-4:]: 
-                        role_name = "Kullanıcı" if m['role'] == 'user' else "AI"
-                        chat_history_text += f"{role_name}: {m['content']}\n"
+                    data_status = "GSC VERİSİ MEVCUT"
+                else:
+                    summary_stats = "Veri çekilemedi veya tarih aralığında veri yok."
+                    top_queries = "Veri yok."
+                    losers = "Veri yok."
+                    data_status = "GSC VERİSİ YOK (Genel Strateji Modu)"
 
-                    # --- HYBRID SYSTEM PROMPT ---
-                    ai_prompt = f"""
-                    Sen gelişmiş bir Yapay Zeka Asistanısın. Şu anda bir SEO analiz aracının içindesin.
-                    
-                    ELİNDEKİ VERİ SETİ (GSC):
-                    {summary_stats}
-                    EN İYİ KELİMELER:
-                    {top_queries}
-                    DÜŞÜK PERFORMANSLILAR:
-                    {losers}
-                    
-                    GÖREVİN: Kullanıcının sorusuna göre MODUNU SEÇ:
-                    
-                    MOD 1: VERİ ODAKLI SORU (GSC, SEO, Trafik)
-                    Eğer soru yukarıdaki veri setiyle ilgiliyse:
-                    - Bir SEO Stratejisti gibi davran.
-                    - Eğer soru basitse (Örn: "Kaç tıklama?") -> Kısa cevap ver.
-                    - Eğer soru analiz istiyorsa (Örn: "Neden düştük?") -> Analiz, İçgörü, Aksiyon formatını kullan.
-                    
-                    MOD 2: GENEL SORU (Kodlama, Genel Kültür, Metin Yazarlığı)
-                    Eğer soru elindeki verilerle alakasızsa (Örn: "Python nedir?", "Bana şiir yaz", "Canonical nedir?"):
-                    - Veri setini görmezden gel.
-                    - Standart bir Gemini asistanı gibi, kendi genel bilginle cevap ver.
-                    - ASLA "Veri setimde bu bilgi yok" diyerek reddetme.
-                    
-                    SOHBET GEÇMİŞİ:
-                    {chat_history_text}
-                    SORU: {prompt}
-                    """
-                    
-                    res = generate_safe(ai_prompt) 
-                    if res:
-                        st.session_state.messages.append({"role": "assistant", "content": res.text})
-                        with st.chat_message("assistant"): st.markdown(res.text)
+                chat_history_text = ""
+                for m in st.session_state.messages[-4:]: 
+                    role_name = "Kullanıcı" if m['role'] == 'user' else "AI"
+                    chat_history_text += f"{role_name}: {m['content']}\n"
 
-
+                # --- MULTI-MODE SYSTEM PROMPT ---
+                ai_prompt = f"""
+                Sen Gelişmiş bir SEO Asistanısın. Şu anki Çalışma Modun: {data_status}
+                
+                ELİNDEKİ BAĞLAM:
+                Marka URL: {gsc_property}
+                
+                GSC VERİ SETİ (Eğer varsa):
+                {summary_stats}
+                Kelime Performansı:
+                {top_queries}
+                
+                GÖREVİN: Kullanıcının sorusuna cevap ver.
+                
+                SENARYO 1: VERİ YOKSA VE STRATEJİ İSTENİYORSA (Örn: "Plan yap", "Sitemi analiz et")
+                - "Elimde spesifik tarih aralığı için GSC verisi yok ancak sitenin URL'sini ve genel SEO prensiplerini kullanarak bir plan yapabilirim." de.
+                - Sitenin sektörünü URL'den veya marka isminden tahmin et.
+                - Genel en iyi uygulamalara (Best Practices) göre profesyonel bir cevap ver.
+                
+                SENARYO 2: VERİ VARSA
+                - Cevabını tamamen verilere dayandır.
+                
+                SENARYO 3: GENEL SOHBET
+                - SEO dışı konularda (Python, Hava durumu vs.) normal bir AI gibi cevap ver.
+                
+                SOHBET GEÇMİŞİ:
+                {chat_history_text}
+                SORU: {prompt}
+                """
+                
+                res = generate_safe(ai_prompt) 
+                if res:
+                    st.session_state.messages.append({"role": "assistant", "content": res.text})
+                    with st.chat_message("assistant"): st.markdown(res.text)
